@@ -790,17 +790,31 @@ function paramsVaried(t){
     Math.abs(f.feel-a.feel) + Math.abs(f.lag-a.lag) + Math.abs(f.chaos-a.chaos) + Math.abs(f.rot-a.rot) > 0.01);
 }
 
-function masterTake(root){
-  if (root.armed) toggleArm(root);
-  const lanes = [...walk(root)].filter(w => w.take.length > 1);
-  const any = lanes.some(w => w.looping) || root.ploop;
-  if (any){
-    lanes.forEach(w => { w.looping = false; updateTk(w); });
-    root.ploop = false;
-  } else {
-    lanes.forEach(w => { w.looping = true; w.playhead = 0; w.pdir = 1; updateTk(w); });
-    if (root.ptake.length > 1){ root.ploop = true; root.pplayhead = 0; root.ppdir = 1; }
-  }
+function gangRoots(){ // the anchor plus its linked coalition
+  return SEL ? [rootOf(SEL), ...linkedTargets()] : [];
+}
+
+function gangArm(){ // R: one pedal press arms (or disarms) the whole coalition, in sync
+  if (!SEL) return;
+  const want = !rootOf(SEL).armed;
+  for (const r of gangRoots()) if (r.armed !== want) toggleArm(r);
+}
+
+function gangTake(){ // P: one decision, applied across every linked tree's lanes
+  const gang = gangRoots();
+  if (!gang.length) return;
+  gang.forEach(r => { if (r.armed) toggleArm(r); });
+  const lanes = gang.flatMap(r => [...walk(r)].filter(w => w.take.length > 1));
+  const any = lanes.some(w => w.looping) || gang.some(r => r.ploop);
+  gang.forEach(r => {
+    [...walk(r)].filter(w => w.take.length > 1).forEach(w => {
+      w.looping = !any;
+      if (w.looping){ w.playhead = 0; w.pdir = 1; }
+      updateTk(w);
+    });
+    if (any) r.ploop = false;
+    else if (r.ptake.length > 1){ r.ploop = true; r.pplayhead = 0; r.ppdir = 1; }
+  });
   syncRecUI();
 }
 
@@ -1437,8 +1451,8 @@ $('ordBtn').addEventListener('click', () => {
   syncFillUI(); renderFills(rootOf(SEL));
 });
 
-$('recBtn').addEventListener('click', () => SEL && toggleArm(rootOf(SEL)));
-$('takeBtn').addEventListener('click', () => SEL && masterTake(rootOf(SEL)));
+$('recBtn').addEventListener('click', () => gangArm());
+$('takeBtn').addEventListener('click', () => gangTake());
 $('boomBtn').addEventListener('click', () => {
   if (!SEL) return;
   const r = rootOf(SEL); r.boom = !r.boom;
@@ -1610,8 +1624,8 @@ document.addEventListener('keydown', e => {
     return;
   }
   if (e.key === ' '){ e.preventDefault(); toggleCyc(); return; }
-  if (k === 'r'){ toggleArm(rootOf(SEL)); return; }
-  if (k === 'p'){ masterTake(rootOf(SEL)); return; }
+  if (k === 'r'){ gangArm(); return; }
+  if (k === 'p'){ gangTake(); return; }
   if (k === 'b'){ const r = rootOf(SEL); r.boom = !r.boom; syncRecUI(); return; }
   if (k === 'n'){ armDeploy(true); return; }
   if (k === 'e'){ roots.forEach(r => r.easing = true); return; }
@@ -1651,7 +1665,7 @@ $('hint').textContent =
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
   'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
-  'looper: R arms · grab = record · release = loop · TAP/T = tap tempo · W:TREE↔W:LANE clocks · P lanes · B boom · E ease · ESC cut';
+  'looper: R arms (linked trees arm together — grab in ANY armed tree records) · release = loop · TAP/T tempo · W:TREE↔W:LANE · P all coalition lanes · B boom · E ease · ESC cut';
 
 /* ---------- boot ---------- */
 
