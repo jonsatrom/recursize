@@ -610,22 +610,21 @@ function moveMove(e){
   w.x = w.bx; w.y = w.by; w.vx = w.vy = 0;
 }
 
+function finishLane(w, moved){ // punch-out: a real take loops; a stray restores the old lane
+  w.recing = false; w.kbRec = false;
+  if (w.take.length > 1 && moved){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+  else {
+    w.take = w.prevTake || [];
+    if (w.take.length > 1 && w.prevLooping){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+  }
+  w.prevTake = null;
+  updateTk(w); syncRecUI();
+}
+
 function endGesture(e){
   e.target.removeEventListener('pointermove', moveResize);
   e.target.removeEventListener('pointermove', moveMove);
-  if (G && G.w){
-    const w = G.w;
-    if (w.recing){
-      w.recing = false;
-      if (w.take.length > 1 && G.moved){ w.looping = true; w.playhead = 0; w.pdir = 1; }
-      else {
-        w.take = w.prevTake || [];
-        if (w.take.length > 1 && w.prevLooping){ w.looping = true; w.playhead = 0; w.pdir = 1; }
-      }
-      w.prevTake = null;
-      updateTk(w); syncRecUI();
-    }
-  }
+  if (G && G.w && G.w.recing) finishLane(G.w, G.moved);
   G = null;
 }
 
@@ -866,7 +865,12 @@ function moveSelected(dt){
   const dx = (held.has('d')?1:0) - (held.has('a')?1:0);
   const dy = (held.has('s')?1:0) - (held.has('w')?1:0);
   if (!dx && !dy) return;
-  if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
+  if (rootOf(w).armed && !w.recing){ // WASD punch-in: keys are a grab too
+    w.prevTake = w.take; w.prevLooping = w.looping;
+    w.recing = true; w.kbRec = true; w.looping = false;
+    w.take = [[w.bx, w.by, w.bw, w.bh]]; w.recAcc = 0;
+    updateTk(w); syncRecUI();
+  } else if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
   const v = (held.has('shift') ? 46 : 180) * dt;
   w.bx += dx*v; w.by += dy*v;
   if (w.parent){
@@ -1448,8 +1452,17 @@ document.addEventListener('keydown', e => {
   else if (e.key === ']') addChild(SEL);
   else if (e.key === '[') closeWin(SEL);
 });
-document.addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
-addEventListener('blur', () => held.clear());
+document.addEventListener('keyup', e => {
+  held.delete(e.key.toLowerCase());
+  // last WASD key up = punch-out of a keyboard-driven take
+  if (SEL && SEL.recing && SEL.kbRec &&
+      !held.has('w') && !held.has('a') && !held.has('s') && !held.has('d'))
+    finishLane(SEL, true);
+});
+addEventListener('blur', () => {
+  held.clear();
+  if (SEL && SEL.recing && SEL.kbRec) finishLane(SEL, true);
+});
 
 $('hint').textContent =
   '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
