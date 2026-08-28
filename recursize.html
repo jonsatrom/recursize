@@ -168,6 +168,7 @@
     background:rgba(255,255,255,.06);
     box-shadow: 0 8px 30px rgba(0,0,0,.4);
   }
+  .win.carry { opacity:.86; } /* a living clone riding the cursor, waiting to be dropped */
 </style>
 </head>
 <body>
@@ -217,6 +218,7 @@
     <div class="row">
       <span class="pill" id="addIn">⊕ INSIDE</span>
       <span class="pill" id="closeSel">⊗ CLOSE</span>
+      <span class="pill" id="dupeBtn">⧉ DUPE</span>
     </div>
     <div class="row">
       <span class="pill" id="newwin">+ WIN</span>
@@ -813,6 +815,7 @@ function stepRec(root, dt){
   for (const w of walk(root)){
     if (!w.looping || w.take.length < 2 || frozen(w)) continue;
     if (G && G.w === w) continue;
+    if (CARRY && CARRY.w === w) continue; // a carried clone's own lane waits for its drop
     const n = w.take.length;
     w.playhead += dt*30 * effv(w,'warp') * w.lwarp * w.pdir;
     if (root.boom){
@@ -1089,6 +1092,91 @@ function commitDeploy(parent, vr, depth){
   step(0);
 }
 
+/* ---------- duplication: xerox a living subtree, carry it, drop it ---------- */
+
+let CARRY = null; // { w: clone, anchor: {x,y} — the base pose its take considers home }
+
+function cloneTree(w, parent){
+  const n = mkWin({ x:w.x, y:w.y, w:w.w, h:w.h }, parent);
+  n.bx = w.bx; n.by = w.by; n.bw = w.bw; n.bh = w.bh;
+  n.o = JSON.parse(JSON.stringify(w.o));
+  n.take = w.take.map(f => f.slice());
+  n.looping = w.looping; n.playhead = w.playhead; n.pdir = w.pdir; n.lwarp = w.lwarp;
+  n.baked = w.baked; n.nw = w.nw; n.nh = w.nh;
+  if (w.baked) n.el.classList.add('baked');
+  updateTk(n);
+  w.kids.forEach(k => {
+    const kk = cloneTree(k, n);
+    n.space.appendChild(kk.el); n.kids.push(kk);
+  });
+  return n;
+}
+
+function duplicate(src){
+  if (!src || CARRY) return;
+  const clone = cloneTree(src, null);
+  // latent root genes: param lane + transport travel with the copy
+  const srcRoot = rootOf(src);
+  clone.ptake = srcRoot.ptake.map(f => ({...f}));
+  clone.ploop = src === srcRoot ? srcRoot.ploop : false;
+  clone.pplayhead = srcRoot.pplayhead; clone.boom = srcRoot.boom;
+  clone.accent = ACCENTS[(rootSeq++) % ACCENTS.length];
+  // anchor: the pose the take calls home, in the ORIGINAL parent's space
+  const anchor = { x: src.bx, y: src.by };
+  // carried as a temporary root at the original's viewport position, offset a touch
+  const r = src.el.getBoundingClientRect();
+  clone.bx = clone.x = r.x + 26; clone.by = clone.y = r.y + 22;
+  roots.push(clone);
+  desk.appendChild(clone.el);
+  clone.el.style.pointerEvents = 'none';
+  clone.el.classList.add('carry');
+  refreshTree(clone);
+  CARRY = { w: clone, anchor };
+  document.addEventListener('pointermove', carryMove);
+  renderNav();
+}
+
+function carryMove(e){
+  if (!CARRY) return;
+  const c = CARRY.w;
+  c.bx = c.x = e.clientX - c.bw/2;
+  c.by = c.y = e.clientY - 13;
+  c.vx = c.vy = 0;
+}
+
+function dropCarry(px, py){
+  if (!CARRY) return;
+  const c = CARRY.w;
+  const target = deployTargetAt(px, py); // clone is pointer-transparent; can't self-target
+  if (target && rootOf(target) !== c){
+    roots.splice(roots.indexOf(c), 1);
+    const sr = target.space.getBoundingClientRect();
+    c.parent = target;
+    c.bx = c.x = c.bx - sr.x; c.by = c.y = c.by - sr.y;
+    target.space.appendChild(c.el);
+    target.kids.push(c);
+  }
+  // rebase the carried window's own take: same dance, new home
+  const dx = c.bx - CARRY.anchor.x, dy = c.by - CARRY.anchor.y;
+  c.take = c.take.map(f => [f[0] + dx, f[1] + dy, f[2], f[3]]);
+  c.el.style.pointerEvents = '';
+  c.el.classList.remove('carry');
+  document.removeEventListener('pointermove', carryMove);
+  CARRY = null;
+  refreshTree(rootOf(c));
+  select(c); flashWin(c);
+}
+
+function cancelCarry(){
+  if (!CARRY) return;
+  const c = CARRY.w;
+  roots.splice(roots.indexOf(c), 1);
+  c.el.remove();
+  document.removeEventListener('pointermove', carryMove);
+  CARRY = null;
+  renderNav();
+}
+
 /* ---------- tap tempo ---------- */
 
 let taps = [];
@@ -1141,6 +1229,7 @@ function setProp(v){ L.prop = v; $('propBtn').classList.toggle('on', v); }
 
 $('addIn').addEventListener('click', () => SEL && addChild(SEL));
 $('closeSel').addEventListener('click', () => SEL && closeWin(SEL));
+$('dupeBtn').addEventListener('click', () => SEL && duplicate(SEL));
 $('newwin').addEventListener('click', () => armDeploy(!deploy));
 $('tapBtn').addEventListener('click', tapTempo);
 $('reset').addEventListener('click', () => {
@@ -1354,6 +1443,7 @@ function groupOf(el){
   return we && we._win ? rootOf(we._win) : null;
 }
 desk.addEventListener('pointerdown', e => {
+  if (CARRY){ e.stopPropagation(); e.preventDefault(); dropCarry(e.clientX, e.clientY); return; }
   if (deploy){ e.stopPropagation(); e.preventDefault(); deployDown(e); return; }
   const r = groupOf(e.target);
   if (r && desk.lastElementChild !== r.el) desk.appendChild(r.el);
@@ -1414,6 +1504,11 @@ document.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (k === 'w' || k === 'a' || k === 's' || k === 'd'){ held.add(k); e.preventDefault(); return; }
   if (k === 'shift'){ held.add(k); return; }
+  if (CARRY){
+    if (e.key === 'Escape'){ cancelCarry(); return; }
+    if (k === 'x'){ const c = CARRY.w; dropCarry(c.bx + c.bw/2, c.by + 13); return; } // X again = drop in place
+    return; // carrying: other keys wait
+  }
   if (deploy){ // armed cursor: digits deploy an N-deep chain at the pointer; ESC/N disarm
     const n = parseInt(e.key, 10);
     if (n >= 1 && n <= 9){
@@ -1474,6 +1569,7 @@ document.addEventListener('keydown', e => {
     syncAllUI(); return;
   }
   if (k === 'q'){ setOverride('auto', !effv(SEL,'auto')); syncParamUI(); return; }
+  if (k === 'x'){ duplicate(SEL); return; } // xerox: living copy rides the cursor
   const n = parseInt(e.key, 10);
   if (n >= 1 && n <= 5){ setOverride('mode', MODES[n-1]); syncParamUI(); }
   else if (e.key === ']') addChild(SEL);
@@ -1495,7 +1591,8 @@ $('hint').textContent =
   '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
   'panel navigator: hover a row = find it on stage · click = select (no re-stack) · dblclick = bring to front · tabs = trees\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
-  '⊕ = window inside · ⇧⊕ = engulf kids · ⊗ = close (kids promote; a root’s kids go free) · controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
+  '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click drops it, into anything; ESC aborts)\n' +
+  'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
   'looper: R arms · grab = record · release = loop · TAP/T = tap tempo · W:TREE↔W:LANE clocks · P lanes · B boom · E ease · ESC cut';
 
 /* ---------- boot ---------- */
