@@ -150,6 +150,7 @@
   .ntab { width:14px; height:14px; border-radius:50%; border:2px solid transparent; cursor:pointer; opacity:.55; flex:0 0 auto; }
   .ntab:hover { opacity:.85; }
   .ntab.on { opacity:1; border-color:rgba(255,255,255,.7); }
+  .ntab.link { opacity:.95; border-color:rgba(255,255,255,.45); border-style:dashed; } /* riding along with the anchor's tweaks */
   #navTree { max-height:112px; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
   .nrow { display:flex; align-items:center; gap:5px; padding:1px 4px; border-radius:4px; cursor:pointer; font:9.5px ui-monospace, Menlo, monospace; color:#9a9aa0; }
   .nrow:hover { background:rgba(255,255,255,.07); color:#ddd; }
@@ -720,6 +721,12 @@ function setFill(m){
   if (m === 'random' && !effv(SEL,'rndc').length)
     SEL.o.rndc = [...Array(12)].map(()=>`hsl(${(Math.random()*360)|0} ${(70+Math.random()*25)|0}% ${(45+Math.random()*15)|0}%)`);
   if (SEL.o.fphase === undefined && eff(SEL,'fphase').owner !== SEL) SEL.o.fphase = effv(SEL,'fphase');
+  for (const r of linkedTargets()){
+    r.o.fill = m;
+    if (m === 'random') r.o.rndc = effv(SEL,'rndc').slice();
+    if (r.o.fphase === undefined) r.o.fphase = 0;
+    renderFills(r);
+  }
   syncFillUI();
   renderFills(rootOf(SEL));
   renderNav();
@@ -731,6 +738,12 @@ function toggleCyc(){
   SEL.o.fplay = !effv(SEL,'fplay');
   if (SEL.o.fphase === undefined) SEL.o.fphase = effv(SEL,'fphase');
   rootOf(SEL).easing = false;
+  for (const r of linkedTargets()){
+    if (SEL.o.fplay && effv(r,'fill') === 'none'){ r.o.fill = 'rainbow'; renderFills(r); }
+    r.o.fplay = SEL.o.fplay;
+    if (r.o.fphase === undefined) r.o.fphase = 0;
+    r.easing = false;
+  }
   syncCycUI();
 }
 
@@ -1197,6 +1210,11 @@ function tapTempo(){
   }
 }
 
+const LINKED = new Set(); // ⇧-clicked tabs: trees that follow the anchor's tweaks
+function linkedTargets(){
+  return [...LINKED].filter(r => roots.includes(r) && SEL && r !== rootOf(SEL));
+}
+
 function setOverride(k, v){
   if (!SEL) return;
   if (SEL === rootOf(SEL) && rootOf(SEL).ploop && ['feel','lag','chaos','rot','mode','auto'].includes(k)){
@@ -1204,6 +1222,10 @@ function setOverride(k, v){
   }
   SEL.o[k] = v;
   if (k === 'rot') SEL.el.style.setProperty('--rot', v);
+  for (const r of linkedTargets()){ // linked trees take it at the root, wholesale
+    r.o[k] = v;
+    if (k === 'rot') r.el.style.setProperty('--rot', v);
+  }
 }
 function clearOverride(k){
   if (!SEL || SEL.o[k] === undefined) return;
@@ -1331,10 +1353,17 @@ function renderNav(){
   const tabs = $('navTabs'); tabs.innerHTML = '';
   roots.forEach((r, i) => {
     const t = document.createElement('span');
-    t.className = 'ntab' + (r === sroot ? ' on' : '');
+    t.className = 'ntab' + (r === sroot ? ' on' : '') + (LINKED.has(r) ? ' link' : '');
     t.style.background = r.accent;
-    t.title = 'tree ' + (i+1) + ' — click: front + focus';
-    t.addEventListener('click', () => { desk.appendChild(r.el); select(r); flashWin(r); });
+    t.title = 'tree ' + (i+1) + ' — click: front + focus · ⇧click: link to anchor';
+    t.addEventListener('click', (e) => {
+      if (e.shiftKey){ // link/unlink: this tree follows the anchor's tweaks
+        if (LINKED.has(r)) LINKED.delete(r); else LINKED.add(r);
+        renderNav(); return;
+      }
+      LINKED.clear();
+      desk.appendChild(r.el); select(r); flashWin(r);
+    });
     t.addEventListener('mouseenter', () => { if (r !== rootOf(SEL)) r.el.classList.add('gpeek'); });
     t.addEventListener('mouseleave', () => r.el.classList.remove('gpeek'));
     tabs.appendChild(t);
@@ -1383,20 +1412,39 @@ $('rateSl').addEventListener('input', () => {
   markLabel('rateL','frate');
 });
 $('rateL').addEventListener('dblclick', () => clearOverride('frate'));
+function stepPhase(d){
+  if (!SEL) return;
+  SEL.o.fphase = effv(SEL,'fphase') + d;
+  renderFills(rootOf(SEL));
+  for (const r of linkedTargets()){
+    r.o.fphase = (r.o.fphase === undefined ? effv(r,'fphase') : r.o.fphase) + d;
+    renderFills(r);
+  }
+}
 $('cycBtn').addEventListener('click', toggleCyc);
-$('stepF').addEventListener('click', () => { if (SEL){ SEL.o.fphase = (effv(SEL,'fphase'))+1; renderFills(rootOf(SEL)); } });
-$('stepB').addEventListener('click', () => { if (SEL){ SEL.o.fphase = (effv(SEL,'fphase'))-1; renderFills(rootOf(SEL)); } });
+$('stepF').addEventListener('click', () => stepPhase(1));
+$('stepB').addEventListener('click', () => stepPhase(-1));
 $('ordBtn').addEventListener('click', () => {
   if (!SEL) return;
   const cur = effv(SEL,'forder');
   SEL.o.forder = cur === 'seq' ? 'rnd' : 'seq';
   if (SEL.o.forder === 'rnd') SEL.shufSeed = (Math.random()*997)|0;
+  for (const r of linkedTargets()){
+    r.o.forder = SEL.o.forder;
+    if (SEL.o.forder === 'rnd') r.shufSeed = (Math.random()*997)|0;
+    renderFills(r);
+  }
   syncFillUI(); renderFills(rootOf(SEL));
 });
 
 $('recBtn').addEventListener('click', () => SEL && toggleArm(rootOf(SEL)));
 $('takeBtn').addEventListener('click', () => SEL && masterTake(rootOf(SEL)));
-$('boomBtn').addEventListener('click', () => { if (SEL){ const r = rootOf(SEL); r.boom = !r.boom; syncRecUI(); } });
+$('boomBtn').addEventListener('click', () => {
+  if (!SEL) return;
+  const r = rootOf(SEL); r.boom = !r.boom;
+  for (const l of linkedTargets()) l.boom = r.boom;
+  syncRecUI();
+});
 
 document.querySelectorAll('#fills .pill').forEach(p => {
   p.addEventListener('click', () => {
@@ -1416,6 +1464,7 @@ function loadMedia(files){
   if (!files.length || !SEL) return;
   (SEL.o.media || []).forEach(it => URL.revokeObjectURL(it.url));
   SEL.o.media = files.map(f => ({ url:URL.createObjectURL(f), vid:f.type.startsWith('video/') }));
+  for (const r of linkedTargets()) r.o.media = SEL.o.media.slice(); // one load feeds the coalition
   setFill('imgs');
 }
 function loadPal(file){
@@ -1425,7 +1474,11 @@ function loadPal(file){
     if (!cols.length)
       cols = (t.match(/^\s*\d{1,3}\s+\d{1,3}\s+\d{1,3}/gm) || [])
         .map(l => { const [r,gg,b] = l.trim().split(/\s+/).map(Number); return `rgb(${r} ${gg} ${b})`; });
-    if (cols.length){ SEL.o.pal = cols; setFill('palette'); }
+    if (cols.length){
+      SEL.o.pal = cols;
+      for (const r of linkedTargets()) r.o.pal = cols.slice();
+      setFill('palette');
+    }
   });
 }
 $('imgIn').addEventListener('change', e => loadMedia([...e.target.files].filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))));
@@ -1542,8 +1595,8 @@ document.addEventListener('keydown', e => {
     else centerWin(SEL);
     return;
   }
-  if (e.key === 'ArrowRight'){ e.preventDefault(); SEL.o.fphase = effv(SEL,'fphase')+1; renderFills(rootOf(SEL)); return; }
-  if (e.key === 'ArrowLeft'){ e.preventDefault(); SEL.o.fphase = effv(SEL,'fphase')-1; renderFills(rootOf(SEL)); return; }
+  if (e.key === 'ArrowRight'){ e.preventDefault(); stepPhase(1); return; }
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); stepPhase(-1); return; }
   if (e.key === 'ArrowUp' || e.key === 'Up'){
     e.preventDefault();
     if (e.shiftKey){ const t = warpTarget(); if (t) t.set(Math.min(4, t.get()*1.25)); syncWarpUI(); }
@@ -1563,6 +1616,7 @@ document.addEventListener('keydown', e => {
   if (k === 'n'){ armDeploy(true); return; }
   if (k === 'e'){ roots.forEach(r => r.easing = true); return; }
   if (e.key === 'Escape'){
+    LINKED.clear(); // the coalition dissolves with the cut
     roots.forEach(r => {
       r.easing = false; r.armed = false; r.precing = false; r.ploop = false;
       for (const w of walk(r)){
@@ -1593,7 +1647,7 @@ addEventListener('blur', () => {
 
 $('hint').textContent =
   '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
-  'panel navigator: hover a row = find it on stage · click = select (no re-stack) · dblclick = bring to front · tabs = trees\n' +
+  'panel navigator: hover = find on stage · click = select (no re-stack) · dblclick = to front · tabs = trees · ⇧click tabs = LINK (anchor’s tweaks hit all linked; plain click dissolves)\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
   'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
