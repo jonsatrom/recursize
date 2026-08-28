@@ -21,6 +21,7 @@
     background-size: 22px 22px;
   }
   #desk { position:fixed; inset:0; }
+  #trails { position:fixed; inset:0; pointer-events:none; } /* detritus lives BEHIND the windows */
   #wordmark {
     position:fixed; top:10px; left:14px; font:10px/1 ui-monospace, Menlo, monospace;
     color:rgba(255,255,255,.22); letter-spacing:.14em; pointer-events:none;
@@ -178,6 +179,7 @@
 </style>
 </head>
 <body>
+<canvas id="trails"></canvas>
 <div id="desk"></div>
 <div id="ghost"></div>
 <div id="wordmark">RECURSIZE</div>
@@ -209,6 +211,13 @@
       <span class="pill" id="tapBtn">TAP</span>
     </div>
     <div class="sl"><label id="rateL" data-k="frate">RATE</label><input type="range" id="rateSl" min="0" max="1" step="0.01" value="0.45"><output id="rateO"></output></div>
+    <div class="row" id="trailsRow">
+      <span class="pill" data-t="none">no trail</span>
+      <span class="pill" data-t="ghost">GHOST</span>
+      <span class="pill" data-t="crumb">CRUMB</span>
+      <span class="pill" data-t="spark">SPARK</span>
+    </div>
+    <div class="sl"><label id="trlL">TRL</label><input type="range" id="trl" min="0" max="1" step="0.01" value="0.5"><output id="trlO"></output></div>
     <div class="row">
       <span class="pill rec" id="recBtn">● REC</span>
       <span class="pill warn" id="takeBtn">▶ TAKE</span>
@@ -254,7 +263,9 @@ const DEFAULTS = {
   mode:'drag', auto:false, feel:.45, lag:.4, chaos:.5, rot:.4, warp:1,
   fill:'none', forder:'seq', frate:2, fplay:false, fphase:0,
   media:[], pal:[], rndc:[],
+  trail:'none', tamt:.5,
 };
+const TRAILS = ['none','ghost','crumb','spark'];
 
 const roots = [];
 let SEL = null;           // the selected window — controls scope to its subtree
@@ -906,6 +917,132 @@ function stepRec(root, dt){
   }
 }
 
+/* ---------- trails: what a moving window sheds ----------
+   GHOST — the classic unredrawn-desktop drag trail: schematic window
+   copies stamped along the path, fading. CRUMB — detritus: squares
+   quantized to two grid sizes, colored from the window's own fill or
+   cut as shitty zoomed crops of its media, falling and dying.
+   SPARK — twinkling spray that floats off. all motion-driven: the
+   window is the brush. rendered behind everything, escaping frames. */
+
+const tcv = document.getElementById('trails');
+const tctx = tcv.getContext('2d');
+function sizeTrails(){ tcv.width = innerWidth; tcv.height = innerHeight; tctx.imageSmoothingEnabled = false; }
+
+const PARTS = [], PMAX = 800;
+const ICACHE = new Map();
+function imgFor(url){
+  let m = ICACHE.get(url);
+  if (!m){ m = new Image(); m.src = url; ICACHE.set(url, m); }
+  return (m.complete && m.naturalWidth) ? m : null;
+}
+
+const absPos = w => { let x = w.x, y = w.y; for (let n = w.parent; n; n = n.parent){ x += n.x; y += n.y + BAR; } return [x, y]; };
+const hiddenUp = w => { for (let n = w; n; n = n.parent) if (n.hidden) return true; return false; };
+const qz = (v, g) => g ? Math.round(v / g) * g : Math.round(v);
+
+function fillItemOf(w){
+  const fm = eff(w, 'fill');
+  if (fm.v === 'none') return null;
+  const p = poolFor(w, fm.v);
+  if (!p.length) return null;
+  const order = effv(w, 'forder'), so = fm.owner || rootOf(w);
+  const slot = order === 'seq' ? fm.d : (fm.d * 5381 + so.shufSeed) % p.length;
+  return p[(((slot + effv(w, 'fphase')) % p.length) + p.length) % p.length];
+}
+function trailPaint(w){ // color or crop source for this window's shed matter
+  const item = fillItemOf(w);
+  if (item && item.c) return { color: item.c };
+  if (item && item.url && !item.vid){
+    const img = imgFor(item.url);
+    if (img){
+      const ss = (0.1 + Math.random() * 0.22) * Math.min(img.naturalWidth, img.naturalHeight);
+      return { crop: { src: img, sx: Math.random() * (img.naturalWidth - ss), sy: Math.random() * (img.naturalHeight - ss), ss } };
+    }
+  }
+  if (item && item.vid && w.fillVid && w.fillVid.readyState >= 2 && w.fillVid.videoWidth){
+    const v = w.fillVid;
+    const ss = (0.12 + Math.random() * 0.25) * Math.min(v.videoWidth, v.videoHeight);
+    return { crop: { src: v, sx: Math.random() * (v.videoWidth - ss), sy: Math.random() * (v.videoHeight - ss), ss } };
+  }
+  return { color: Math.random() < 0.5 ? '#3a3a3e' : '#55555b' }; // shedding its own chrome
+}
+
+function emit(p){ if (PARTS.length >= PMAX) PARTS.shift(); PARTS.push(p); }
+
+function emitTrails(w, ax, ay, dt){
+  const mode = effv(w, 'trail');
+  if (mode === 'none' || hiddenUp(w)) { w.tpx = undefined; return; }
+  const amt = effv(w, 'tamt');
+  const cx = ax + w.w / 2, cy = ay + w.h / 2;
+  if (w.tpx === undefined){ w.tpx = cx; w.tpy = cy; w.tdist = 0; return; }
+  const dx = cx - w.tpx, dy = cy - w.tpy;
+  const sp = Math.hypot(dx, dy);
+  w.tpx = cx; w.tpy = cy;
+  if (sp < 0.7 || sp > 300) return; // still, or teleported
+  if (mode === 'ghost'){
+    w.tdist = (w.tdist || 0) + sp;
+    const gap = 38 - amt * 26;
+    while (w.tdist > gap){
+      w.tdist -= gap;
+      const paint = trailPaint(w);
+      emit({ kind:'ghost', x:ax, y:ay, w:w.w, h:w.h, vx:0, vy:0, g:0,
+             fill: paint.color || '#232326', life:0, ttl: 0.9 + amt * 2.2, a0: 0.55 });
+    }
+  } else if (mode === 'crumb'){
+    const n = Math.min(8, 1 + (sp * amt * 0.3) | 0);
+    for (let i = 0; i < n; i++){
+      const grid = Math.random() < 0.5 ? 7 : 18; // two noise resolutions
+      const paint = trailPaint(w);
+      emit({ kind:'crumb', grid, size: grid * (Math.random() < 0.25 ? 2 : 1),
+             x: ax + Math.random() * w.w, y: ay + Math.random() * w.h,
+             vx: -dx / dt * 0.12 + (Math.random() - 0.5) * 40,
+             vy: -dy / dt * 0.12 + (Math.random() - 0.5) * 30,
+             g: 90, life: 0, ttl: 0.5 + Math.random() * 1.5 * amt, a0: 0.85, ...paint });
+    }
+  } else if (mode === 'spark'){
+    const n = Math.min(7, 1 + (sp * amt * 0.4) | 0);
+    for (let i = 0; i < n; i++){
+      const paint = trailPaint(w);
+      emit({ kind:'spark', grid: 0, size: 2 + Math.random() * 4,
+             x: ax + Math.random() * w.w, y: ay + Math.random() * w.h,
+             vx: -dx / dt * 0.25 + (Math.random() - 0.5) * 130,
+             vy: -dy / dt * 0.25 + (Math.random() - 0.5) * 130 - 20,
+             g: -14, life: 0, ttl: 0.4 + Math.random() * 1.1 * amt, a0: 0.95,
+             color: paint.color || '#ddd', crop: paint.crop });
+    }
+  }
+}
+
+function drawGhostPart(p){
+  const x = Math.round(p.x), y = Math.round(p.y), wR = Math.round(p.w), h = Math.round(p.h);
+  tctx.beginPath(); tctx.roundRect(x, y, wR, h, 9);
+  tctx.fillStyle = '#2b2b2e'; tctx.fill();
+  tctx.fillStyle = p.fill; tctx.fillRect(x + 1, y + BAR, wR - 2, Math.max(0, h - BAR - 1));
+  tctx.fillStyle = '#39393d'; tctx.fillRect(x + 1, y + 1, wR - 2, BAR - 1);
+  tctx.strokeStyle = 'rgba(255,255,255,.22)'; tctx.stroke();
+}
+
+function stepTrails(dt){
+  tctx.clearRect(0, 0, tcv.width, tcv.height);
+  for (let i = PARTS.length - 1; i >= 0; i--){
+    const p = PARTS[i];
+    p.life += dt;
+    if (p.life >= p.ttl){ PARTS.splice(i, 1); continue; }
+    p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
+    if (p.kind === 'spark' && ((p.life * 18) | 0) % 2) continue; // twinkle
+    tctx.globalAlpha = (1 - p.life / p.ttl) * p.a0;
+    if (p.kind === 'ghost'){ drawGhostPart(p); }
+    else if (p.crop){
+      try { tctx.drawImage(p.crop.src, p.crop.sx, p.crop.sy, p.crop.ss, p.crop.ss, qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size); } catch(e){}
+    } else {
+      tctx.fillStyle = p.color;
+      tctx.fillRect(qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size);
+    }
+  }
+  tctx.globalAlpha = 1;
+}
+
 /* ---------- auto breath + physics ---------- */
 
 function noise(w, k, t){
@@ -1044,6 +1181,7 @@ function simTree(root, dt){
     const s = w.el.style;
     s.left = w.x.toFixed(1)+'px'; s.top = w.y.toFixed(1)+'px';
     s.width = Math.max(20,w.w).toFixed(1)+'px'; s.height = Math.max(18,w.h).toFixed(1)+'px';
+    if (dt > 0){ const ap = absPos(w); emitTrails(w, ap[0], ap[1], dt); }
     if (w.baked){
       w.space.style.width  = (w.nw - 1) + 'px';
       w.space.style.height = (w.nh - BAR - 0.5) + 'px';
@@ -1058,6 +1196,7 @@ function step(dt){
   for (const r of roots){ stepRec(r, dt); stepCycle(r, dt); }
   moveSelected(dt);
   for (const r of roots) simTree(r, dt);
+  if (dt > 0) stepTrails(dt);
 }
 
 let last = performance.now();
@@ -1343,6 +1482,19 @@ function bindSlider(id, key){
   if (lab) lab.addEventListener('dblclick', () => clearOverride(key));
 }
 bindSlider('feel','feel'); bindSlider('lag','lag'); bindSlider('chaos','chaos'); bindSlider('rot','rot');
+bindSlider('trl','tamt');
+
+function syncTrailUI(){
+  if (!SEL) return;
+  const t = effv(SEL,'trail');
+  document.querySelectorAll('#trailsRow .pill').forEach(p => p.classList.toggle('on', p.dataset.t === t));
+  $('trl').value = effv(SEL,'tamt'); $('trlO').textContent = effv(SEL,'tamt').toFixed(2);
+  markLabel('trlL','tamt');
+}
+document.querySelectorAll('#trailsRow .pill').forEach(p => {
+  p.addEventListener('click', () => { setOverride('trail', p.dataset.t); syncTrailUI(); });
+  p.addEventListener('dblclick', () => { clearOverride('trail'); syncTrailUI(); });
+});
 
 function markLabel(labId, key){
   const lab = $(labId); if (!lab || !SEL) return;
@@ -1404,7 +1556,7 @@ function syncGroupTag(){
   $('gdot').style.background = root.accent;
   $('gtag').textContent = '— d' + depthOf(SEL) + (root.kids.length || depthOf(SEL) ? '' : ' (bare)');
 }
-function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); syncRecUI(); syncWarpUI(); syncGroupTag(); renderNav(); }
+function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); syncRecUI(); syncWarpUI(); syncTrailUI(); syncGroupTag(); renderNav(); }
 
 /* ---------- navigator: find, select, and surface windows without touching them ---------- */
 
@@ -1717,6 +1869,11 @@ document.addEventListener('keydown', e => {
   if (k === 'q'){ setOverride('auto', !effv(SEL,'auto')); syncParamUI(); return; }
   if (k === 'x'){ duplicate(SEL); return; } // xerox: living copy rides the cursor
   if (k === 'h'){ toggleHide(SEL); return; }
+  if (k === 'g'){ // cycle trail modes on the selection
+    const cur = effv(SEL,'trail');
+    setOverride('trail', TRAILS[(TRAILS.indexOf(cur) + 1) % TRAILS.length]);
+    syncTrailUI(); return;
+  }
   if (e.key === '.'){ restack(SEL, 1); return; }
   if (e.key === ','){ restack(SEL, -1); return; }
   if (e.key === '>'){ restack(SEL, Infinity); return; }
@@ -1741,7 +1898,7 @@ $('hint').textContent =
   'panel navigator: hover = find · click = select · dblclick = to front · ⇧click tabs = LINK: counterparts MIRROR your grabs/WASD/C live (and record them when armed) + settings gang · plain click dissolves\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
-  'controls cascade from SELECTED down · • set here · dblclick label = inherit · H / row-eye = hide (loops keep running) · . , = raise/lower · > < = front/back\n' +
+  'controls cascade from SELECTED down · • set here · dblclick label = inherit · H/eye = hide (loops run on) · . , > < = layer order · G = cycle TRAILS (ghost/crumb/spark — motion sheds them)\n' +
   'looper: R arms (linked trees arm together — grab in ANY armed tree records) · release = loop · TAP/T tempo · W:TREE↔W:LANE · P all coalition lanes · B boom · E ease · ESC cut';
 
 /* ---------- boot ---------- */
@@ -1750,6 +1907,7 @@ let booted = false;
 function boot(){
   if (VW() > 60 && VH() > 60){
     booted = true;
+    sizeTrails();
     newRoot(5);
     placeCtrl();
     last = performance.now();
@@ -1760,6 +1918,7 @@ boot();
 
 addEventListener('resize', () => {
   if (!booted) return;
+  sizeTrails();
   if (!ctrlTouched) placeCtrl();
   if (roots.length === 1 && roots[0].bw < 300 && VW() > 400){
     roots[0].el.remove(); roots.length = 0; newRoot(5);
