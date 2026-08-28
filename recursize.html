@@ -156,6 +156,11 @@
   .nrow:hover { background:rgba(255,255,255,.07); color:#ddd; }
   .nrow.on { background:rgba(255,255,255,.13); color:#f0f0f2; }
   .nsw { width:10px; height:10px; border-radius:3px; background:#3a3a3e; background-size:cover; background-position:center; flex:0 0 auto; border:0.5px solid rgba(255,255,255,.15); }
+  .neye { margin-left:auto; flex:0 0 auto; width:14px; text-align:center; font-size:9px; color:#6a6a70; cursor:pointer; }
+  .neye:hover { color:#ddd; }
+  .nrow.dim { opacity:.45; }
+  .ntab.tabhid { opacity:.22; }
+  .win.hid { display:none; } /* muted from view — still simulating, looping, recording underneath */
   .ntk { width:8px; flex:0 0 auto; font-size:8px; line-height:1; }
   .nlbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   @keyframes flashpulse { 0%,100% { outline-color:transparent; } 20%,70% { outline-color:var(--acc,#8ad); } }
@@ -1403,6 +1408,24 @@ function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); sy
 
 /* ---------- navigator: find, select, and surface windows without touching them ---------- */
 
+function toggleHide(w){ // visibility is a mute, not a pause — the hidden keep dancing
+  if (!w) return;
+  w.hidden = !w.hidden;
+  w.el.classList.toggle('hid', w.hidden);
+  renderNav();
+}
+
+function restack(w, dir){ // sibling z-order: array order IS stack order, bottom to top
+  const arr = w.parent ? w.parent.kids : roots;
+  const i = arr.indexOf(w); if (i < 0) return;
+  const j = dir === Infinity ? arr.length - 1 : dir === -Infinity ? 0 : clamp(i + dir, 0, arr.length - 1);
+  if (i === j) return;
+  arr.splice(i, 1); arr.splice(j, 0, w);
+  const cont = w.parent ? w.parent.space : desk;
+  arr.forEach(n => cont.appendChild(n.el));
+  renderNav();
+}
+
 function flashWin(w){
   w.el.classList.remove('flash'); void w.el.offsetWidth;
   w.el.classList.add('flash');
@@ -1416,7 +1439,7 @@ function renderNav(){
   const tabs = $('navTabs'); tabs.innerHTML = '';
   roots.forEach((r, i) => {
     const t = document.createElement('span');
-    t.className = 'ntab' + (r === sroot ? ' on' : '') + (LINKED.has(r) ? ' link' : '');
+    t.className = 'ntab' + (r === sroot ? ' on' : '') + (LINKED.has(r) ? ' link' : '') + (r.hidden ? ' tabhid' : '');
     t.style.background = r.accent;
     t.title = 'tree ' + (i+1) + ' — click: front + focus · ⇧click: link to anchor';
     t.addEventListener('click', (e) => {
@@ -1425,7 +1448,7 @@ function renderNav(){
         renderNav(); return;
       }
       LINKED.clear();
-      desk.appendChild(r.el); select(r); flashWin(r);
+      restack(r, Infinity); select(r); flashWin(r);
     });
     t.addEventListener('mouseenter', () => { if (r !== rootOf(SEL)) r.el.classList.add('gpeek'); });
     t.addEventListener('mouseleave', () => r.el.classList.remove('gpeek'));
@@ -1434,7 +1457,7 @@ function renderNav(){
   const tree = $('navTree'); tree.innerHTML = '';
   const addRow = (w, depth, sib) => {
     const row = document.createElement('div');
-    row.className = 'nrow' + (w === SEL ? ' on' : '');
+    row.className = 'nrow' + (w === SEL ? ' on' : '') + (w.hidden ? ' dim' : '');
     const tk = document.createElement('span'); tk.className = 'ntk';
     tk.textContent = w.recing ? '●' : w.looping ? '●' : w.take.length > 1 ? '○' : '';
     tk.style.color = w.recing ? '#e5484d' : w.looping ? sroot.accent : '#77777c';
@@ -1447,14 +1470,16 @@ function renderNav(){
     const lbl = document.createElement('span'); lbl.className = 'nlbl';
     lbl.textContent = '·'.repeat(depth) + (depth ? ' copy' + (depth > 1 ? ' ' + depth : '') : ' Screen…')
       + (sib ? ' ' + sib : '') + (w.baked ? ' ⌀' : '');
-    row.append(tk, sw, lbl);
+    const eye = document.createElement('span'); eye.className = 'neye';
+    eye.textContent = w.hidden ? '◌' : '◉';
+    eye.title = w.hidden ? 'show (loops kept running)' : 'hide (loops keep running)';
+    eye.addEventListener('pointerdown', ev => ev.stopPropagation());
+    eye.addEventListener('click', ev => { ev.stopPropagation(); toggleHide(w); });
+    row.append(tk, sw, lbl, eye);
     row.addEventListener('mouseenter', () => w.el.classList.add('gpeek')); // find it in the pile
     row.addEventListener('mouseleave', () => w.el.classList.remove('gpeek'));
     row.addEventListener('click', () => { select(w); flashWin(w); });       // select without re-stacking
-    row.addEventListener('dblclick', () => {                                 // bring to front where it lives
-      if (w.parent) w.parent.space.appendChild(w.el); else desk.appendChild(w.el);
-      flashWin(w);
-    });
+    row.addEventListener('dblclick', () => { restack(w, Infinity); flashWin(w); }); // to the front where it lives
     tree.appendChild(row);
     w.kids.forEach((k, i) => addRow(k, depth + 1, w.kids.length > 1 ? String.fromCharCode(97 + i) : ''));
   };
@@ -1566,7 +1591,7 @@ desk.addEventListener('pointerdown', e => {
   if (CARRY){ e.stopPropagation(); e.preventDefault(); dropCarry(e.clientX, e.clientY, e.shiftKey); return; }
   if (deploy){ e.stopPropagation(); e.preventDefault(); deployDown(e); return; }
   const r = groupOf(e.target);
-  if (r && desk.lastElementChild !== r.el) desk.appendChild(r.el);
+  if (r && desk.lastElementChild !== r.el) restack(r, Infinity);
 }, { capture:true });
 
 // double-click any surface = a window is born there (desk → root, body → child)
@@ -1646,7 +1671,7 @@ document.addEventListener('keydown', e => {
     if (e.shiftKey){ // ⇧Tab cycles trees: front + focus + flash
       const i = roots.indexOf(rootOf(SEL));
       const r = roots[(i + 1) % roots.length];
-      desk.appendChild(r.el); select(r); flashWin(r);
+      restack(r, Infinity); select(r); flashWin(r);
       return;
     }
     const seq = [...walk(rootOf(SEL))]; // Tab = DFS through the focused tree
@@ -1691,6 +1716,11 @@ document.addEventListener('keydown', e => {
   }
   if (k === 'q'){ setOverride('auto', !effv(SEL,'auto')); syncParamUI(); return; }
   if (k === 'x'){ duplicate(SEL); return; } // xerox: living copy rides the cursor
+  if (k === 'h'){ toggleHide(SEL); return; }
+  if (e.key === '.'){ restack(SEL, 1); return; }
+  if (e.key === ','){ restack(SEL, -1); return; }
+  if (e.key === '>'){ restack(SEL, Infinity); return; }
+  if (e.key === '<'){ restack(SEL, -Infinity); return; }
   const n = parseInt(e.key, 10);
   if (n >= 1 && n <= 5){ setOverride('mode', MODES[n-1]); syncParamUI(); }
   else if (e.key === ']') addChild(SEL);
@@ -1711,7 +1741,7 @@ $('hint').textContent =
   'panel navigator: hover = find · click = select · dblclick = to front · ⇧click tabs = LINK: counterparts MIRROR your grabs/WASD/C live (and record them when armed) + settings gang · plain click dissolves\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
-  'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
+  'controls cascade from SELECTED down · • set here · dblclick label = inherit · H / row-eye = hide (loops keep running) · . , = raise/lower · > < = front/back\n' +
   'looper: R arms (linked trees arm together — grab in ANY armed tree records) · release = loop · TAP/T tempo · W:TREE↔W:LANE · P all coalition lanes · B boom · E ease · ESC cut';
 
 /* ---------- boot ---------- */
