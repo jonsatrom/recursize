@@ -482,12 +482,36 @@ function select(w){
 
 function centerWin(w){
   if (!w) return;
-  if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
-  if (!w.parent){ w.bx = (VW() - w.bw)/2; w.by = (VH() - w.bh)/2; }
+  let cx, cy;
+  if (!w.parent){ cx = (VW() - w.bw)/2; cy = (VH() - w.bh)/2; }
   else {
     const p = w.parent;
-    w.bx = ((p.w - EDGE*2) - w.bw)/2 + EDGE;
-    w.by = ((p.h - BAR - EDGE*2) - w.bh)/2 + EDGE;
+    cx = ((p.w - EDGE*2) - w.bw)/2 + EDGE;
+    cy = ((p.h - BAR - EDGE*2) - w.bh)/2 + EDGE;
+  }
+  if (rootOf(w).armed && !frozen(w) && !w.recing){
+    // armed C = a recordable glide: tween the base itself so the lane holds real motion
+    w.prevTake = w.take; w.prevLooping = w.looping;
+    w.recing = true; w.tweenRec = true; w.looping = false;
+    w.take = [[w.bx, w.by, w.bw, w.bh]]; w.recAcc = 0;
+    w.tween = { fx:w.bx, fy:w.by, fw:w.bw, fh:w.bh, tx:cx, ty:cy, tw2:w.bw, th2:w.bh, t:0, dur:0.7 };
+    updateTk(w); syncRecUI();
+  } else {
+    if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
+    w.bx = cx; w.by = cy;
+  }
+}
+
+function stepTween(w, dt){
+  const tw = w.tween;
+  tw.t += dt;
+  let k = clamp(tw.t / tw.dur, 0, 1);
+  k = k*k*(3 - 2*k);
+  w.bx = tw.fx + (tw.tx - tw.fx)*k; w.by = tw.fy + (tw.ty - tw.fy)*k;
+  w.bw = tw.fw + (tw.tw2 - tw.fw)*k; w.bh = tw.fh + (tw.th2 - tw.fh)*k;
+  if (tw.t >= tw.dur){
+    w.tween = null;
+    if (w.recing && w.tweenRec) finishLane(w, true); // glide complete → straight into the loop
   }
 }
 
@@ -499,6 +523,7 @@ function ancestryPath(w){ const a = []; for (let n = w.parent; n; n = n.parent) 
 
 function grabLane(w){
   const root = rootOf(w);
+  w.tween = null; w.tweenRec = false; // your hand outranks any glide in progress
   if (root.armed){
     w.prevTake = w.take; w.prevLooping = w.looping;
     w.recing = true; w.looping = false;
@@ -611,7 +636,7 @@ function moveMove(e){
 }
 
 function finishLane(w, moved){ // punch-out: a real take loops; a stray restores the old lane
-  w.recing = false; w.kbRec = false;
+  w.recing = false; w.kbRec = false; w.tweenRec = false;
   if (w.take.length > 1 && moved){ w.looping = true; w.playhead = 0; w.pdir = 1; }
   else {
     w.take = w.prevTake || [];
@@ -866,6 +891,7 @@ function moveSelected(dt){
   const dy = (held.has('s')?1:0) - (held.has('w')?1:0);
   if (!dx && !dy) return;
   if (rootOf(w).armed && !w.recing){ // WASD punch-in: keys are a grab too
+    w.tween = null; w.tweenRec = false;
     w.prevTake = w.take; w.prevLooping = w.looping;
     w.recing = true; w.kbRec = true; w.looping = false;
     w.take = [[w.bx, w.by, w.bw, w.bh]]; w.recAcc = 0;
@@ -944,6 +970,7 @@ function simTree(root, dt){
 
 function step(dt){
   time += dt;
+  for (const r of roots) for (const w of walk(r)) if (w.tween) stepTween(w, dt); // tweens write bases before the tape reads them
   for (const r of roots){ stepRec(r, dt); stepCycle(r, dt); }
   moveSelected(dt);
   for (const r of roots) simTree(r, dt);
