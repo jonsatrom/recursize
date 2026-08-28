@@ -483,8 +483,9 @@ function select(w){
   syncAllUI();
 }
 
-function centerWin(w){
+function centerWin(w, mirrored){
   if (!w) return;
+  if (!mirrored) twinsOf(w).forEach(t => centerWin(t, true)); // counterparts glide to their OWN centers
   let cx, cy;
   if (!w.parent){ cx = (VW() - w.bw)/2; cy = (VH() - w.bh)/2; }
   else {
@@ -524,6 +525,25 @@ function mods(e){ return { sym: L.sym, prop: e.shiftKey || L.prop }; }
 
 function ancestryPath(w){ const a = []; for (let n = w.parent; n; n = n.parent) a.push(n); return a; } // nearest first
 
+function pathOf(w){ // sibling-index route from root to window
+  const p = []; let n = w;
+  while (n.parent){ p.unshift(n.parent.kids.indexOf(n)); n = n.parent; }
+  return p;
+}
+function corr(root, path){ // the corresponding window in another tree: same path, nearest relative if shapes diverge
+  let n = root;
+  for (const i of path){
+    if (!n.kids.length) break;
+    n = n.kids[Math.min(i, n.kids.length - 1)];
+  }
+  return n;
+}
+function twinsOf(w){ // linked trees' counterparts — the puppets that mirror this window's manipulation
+  if (!LINKED.size) return [];
+  const p = pathOf(w);
+  return linkedTargets().map(r => corr(r, p)).filter(t => t && t !== w && !frozen(t));
+}
+
 function grabLane(w){
   const root = rootOf(w);
   w.tween = null; w.tweenRec = false; // your hand outranks any glide in progress
@@ -555,6 +575,7 @@ function startResize(e, w){
     sfUp: [], sfDown: [],                      // ripple smoothed factors by tree distance
     rnd: new Map([...walk(root)].map(n => [n, { x:(Math.random()*2.6-1.3), y:(Math.random()*2.6-1.3) }])),
     fx:1, fy:1,
+    twins: twinsOf(w).map(t => { grabLane(t); return { w:t, sx:t.bx, sy:t.by, sw:t.bw, sh:t.bh }; }),
   };
   e.target.setPointerCapture(e.pointerId);
   e.target.addEventListener('pointermove', moveResize);
@@ -584,6 +605,13 @@ function moveResize(e){
   const mode = effv(w,'mode');
   if (mode === 'nsync' || mode === 'unsync' || mode === 'random') applyFactorsInstant(mode);
   pushAncestors(w);
+  if (G.twins) for (const tw of G.twins){ // linked counterparts perform the same gesture, as deltas
+    tw.w.bw = Math.max(MIN_W, tw.sw + (nw - st.w));
+    tw.w.bh = Math.max(MIN_H, tw.sh + (nh - st.h));
+    tw.w.bx = tw.sx + (nx - st.x);
+    tw.w.by = tw.sy + (ny - st.y);
+    pushAncestors(tw.w);
+  }
 }
 
 function factorAt(mode, dist, f){ // dist ≥ 1 along lineage
@@ -622,7 +650,8 @@ function startMove(e, w){
   select(w);
   if (frozen(w)) return;
   grabLane(w);
-  G = { kind:'move', w, root:rootOf(w), px:e.clientX, py:e.clientY, sx:w.bx, sy:w.by, moved:false };
+  G = { kind:'move', w, root:rootOf(w), px:e.clientX, py:e.clientY, sx:w.bx, sy:w.by, moved:false,
+        twins: twinsOf(w).map(t => { grabLane(t); return { w:t, sx:t.bx, sy:t.by, sw:t.bw, sh:t.bh }; }) };
   e.target.setPointerCapture(e.pointerId);
   e.target.addEventListener('pointermove', moveMove);
   e.target.addEventListener('pointerup', endGesture, { once:true });
@@ -636,6 +665,10 @@ function moveMove(e){
   w.bx = G.sx + e.clientX - G.px;
   w.by = G.sy + e.clientY - G.py;
   w.x = w.bx; w.y = w.by; w.vx = w.vy = 0;
+  if (G.twins) for (const tw of G.twins){
+    tw.w.bx = tw.sx + (w.bx - G.sx);
+    tw.w.by = tw.sy + (w.by - G.sy);
+  }
 }
 
 function finishLane(w, moved){ // punch-out: a real take loops; a stray restores the old lane
@@ -653,6 +686,7 @@ function endGesture(e){
   e.target.removeEventListener('pointermove', moveResize);
   e.target.removeEventListener('pointermove', moveMove);
   if (G && G.w && G.w.recing) finishLane(G.w, G.moved);
+  if (G && G.twins) G.twins.forEach(tw => { if (tw.w.recing) finishLane(tw.w, G.moved); });
   G = null;
 }
 
@@ -933,6 +967,21 @@ function moveSelected(dt){
     const p = w.parent;
     w.bx = clamp(w.bx, EDGE, Math.max(EDGE, p.w - EDGE - w.bw));
     w.by = clamp(w.by, EDGE, Math.max(EDGE, p.h - BAR - EDGE - w.bh));
+  }
+  for (const t of twinsOf(w)){ // linked counterparts glide the same way
+    if (rootOf(t).armed && !t.recing){
+      t.tween = null; t.tweenRec = false;
+      t.prevTake = t.take; t.prevLooping = t.looping;
+      t.recing = true; t.kbRec = true; t.looping = false;
+      t.take = [[t.bx, t.by, t.bw, t.bh]]; t.recAcc = 0;
+      updateTk(t);
+    } else if (t.looping){ t.looping = false; updateTk(t); }
+    t.bx += dx*v; t.by += dy*v;
+    if (t.parent){
+      const p = t.parent;
+      t.bx = clamp(t.bx, EDGE, Math.max(EDGE, p.w - EDGE - t.bw));
+      t.by = clamp(t.by, EDGE, Math.max(EDGE, p.h - BAR - EDGE - t.bh));
+    }
   }
 }
 
@@ -1647,21 +1696,19 @@ document.addEventListener('keydown', e => {
   else if (e.key === ']') addChild(SEL);
   else if (e.key === '[') closeWin(SEL);
 });
+function finishKbLanes(){ // punch out every keyboard-driven take, twins included
+  for (const r of roots) for (const w of walk(r))
+    if (w.recing && w.kbRec) finishLane(w, true);
+}
 document.addEventListener('keyup', e => {
   held.delete(e.key.toLowerCase());
-  // last WASD key up = punch-out of a keyboard-driven take
-  if (SEL && SEL.recing && SEL.kbRec &&
-      !held.has('w') && !held.has('a') && !held.has('s') && !held.has('d'))
-    finishLane(SEL, true);
+  if (!held.has('w') && !held.has('a') && !held.has('s') && !held.has('d')) finishKbLanes();
 });
-addEventListener('blur', () => {
-  held.clear();
-  if (SEL && SEL.recing && SEL.kbRec) finishLane(SEL, true);
-});
+addEventListener('blur', () => { held.clear(); finishKbLanes(); });
 
 $('hint').textContent =
   '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
-  'panel navigator: hover = find on stage · click = select (no re-stack) · dblclick = to front · tabs = trees · ⇧click tabs = LINK (anchor’s tweaks hit all linked; plain click dissolves)\n' +
+  'panel navigator: hover = find · click = select · dblclick = to front · ⇧click tabs = LINK: counterparts MIRROR your grabs/WASD/C live (and record them when armed) + settings gang · plain click dissolves\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
   'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
