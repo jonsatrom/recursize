@@ -21,7 +21,7 @@
     background-size: 22px 22px;
   }
   #desk { position:fixed; inset:0; }
-  #trails { position:fixed; inset:0; pointer-events:none; } /* detritus lives BEHIND the windows */
+  #trails, #trailsF { position:fixed; inset:0; pointer-events:none; } /* detritus behind the windows — or raining on top of them */
   #wordmark {
     position:fixed; top:10px; left:14px; font:10px/1 ui-monospace, Menlo, monospace;
     color:rgba(255,255,255,.22); letter-spacing:.14em; pointer-events:none;
@@ -181,6 +181,7 @@
 <body>
 <canvas id="trails"></canvas>
 <div id="desk"></div>
+<canvas id="trailsF"></canvas>
 <div id="ghost"></div>
 <div id="wordmark">RECURSIZE</div>
 <div id="hint"></div>
@@ -216,6 +217,7 @@
       <span class="pill" data-t="ghost">GHOST</span>
       <span class="pill" data-t="crumb">CRUMB</span>
       <span class="pill" data-t="spark">SPARK</span>
+      <span class="pill warn" id="overBtn">OVER</span>
     </div>
     <div class="sl"><label id="trlL">TRL</label><input type="range" id="trl" min="0" max="1" step="0.01" value="0.5"><output id="trlO"></output></div>
     <div class="row">
@@ -263,7 +265,7 @@ const DEFAULTS = {
   mode:'drag', auto:false, feel:.45, lag:.4, chaos:.5, rot:.4, warp:1,
   fill:'none', forder:'seq', frate:2, fplay:false, fphase:0,
   media:[], pal:[], rndc:[],
-  trail:'none', tamt:.5,
+  trail:'none', tamt:.5, tover:false,
 };
 const TRAILS = ['none','ghost','crumb','spark'];
 
@@ -927,7 +929,12 @@ function stepRec(root, dt){
 
 const tcv = document.getElementById('trails');
 const tctx = tcv.getContext('2d');
-function sizeTrails(){ tcv.width = innerWidth; tcv.height = innerHeight; tctx.imageSmoothingEnabled = false; }
+const fcv = document.getElementById('trailsF');
+const fctx = fcv.getContext('2d');
+function sizeTrails(){
+  tcv.width = fcv.width = innerWidth; tcv.height = fcv.height = innerHeight;
+  tctx.imageSmoothingEnabled = false; fctx.imageSmoothingEnabled = false;
+}
 
 const PARTS = [], PMAX = 800;
 const ICACHE = new Map();
@@ -974,6 +981,7 @@ function emitTrails(w, ax, ay, dt){
   const mode = effv(w, 'trail');
   if (mode === 'none' || hiddenUp(w)) { w.tpx = undefined; return; }
   const amt = effv(w, 'tamt');
+  const over = effv(w, 'tover');
   const cx = ax + w.w / 2, cy = ay + w.h / 2;
   if (w.tpx === undefined){ w.tpx = cx; w.tpy = cy; w.tdist = 0; return; }
   const dx = cx - w.tpx, dy = cy - w.tpy;
@@ -986,7 +994,7 @@ function emitTrails(w, ax, ay, dt){
     while (w.tdist > gap){
       w.tdist -= gap;
       const paint = trailPaint(w);
-      emit({ kind:'ghost', x:ax, y:ay, w:w.w, h:w.h, vx:0, vy:0, g:0,
+      emit({ kind:'ghost', over, x:ax, y:ay, w:w.w, h:w.h, vx:0, vy:0, g:0,
              fill: paint.color || '#232326', life:0, ttl: 0.9 + amt * 2.2, a0: 0.55 });
     }
   } else if (mode === 'crumb'){
@@ -994,7 +1002,7 @@ function emitTrails(w, ax, ay, dt){
     for (let i = 0; i < n; i++){
       const grid = Math.random() < 0.5 ? 7 : 18; // two noise resolutions
       const paint = trailPaint(w);
-      emit({ kind:'crumb', grid, size: grid * (Math.random() < 0.25 ? 2 : 1),
+      emit({ kind:'crumb', over, grid, size: grid * (Math.random() < 0.25 ? 2 : 1),
              x: ax + Math.random() * w.w, y: ay + Math.random() * w.h,
              vx: -dx / dt * 0.12 + (Math.random() - 0.5) * 40,
              vy: -dy / dt * 0.12 + (Math.random() - 0.5) * 30,
@@ -1004,7 +1012,7 @@ function emitTrails(w, ax, ay, dt){
     const n = Math.min(7, 1 + (sp * amt * 0.4) | 0);
     for (let i = 0; i < n; i++){
       const paint = trailPaint(w);
-      emit({ kind:'spark', grid: 0, size: 2 + Math.random() * 4,
+      emit({ kind:'spark', over, grid: 0, size: 2 + Math.random() * 4,
              x: ax + Math.random() * w.w, y: ay + Math.random() * w.h,
              vx: -dx / dt * 0.25 + (Math.random() - 0.5) * 130,
              vy: -dy / dt * 0.25 + (Math.random() - 0.5) * 130 - 20,
@@ -1014,33 +1022,35 @@ function emitTrails(w, ax, ay, dt){
   }
 }
 
-function drawGhostPart(p){
+function drawGhostPart(ctx, p){
   const x = Math.round(p.x), y = Math.round(p.y), wR = Math.round(p.w), h = Math.round(p.h);
-  tctx.beginPath(); tctx.roundRect(x, y, wR, h, 9);
-  tctx.fillStyle = '#2b2b2e'; tctx.fill();
-  tctx.fillStyle = p.fill; tctx.fillRect(x + 1, y + BAR, wR - 2, Math.max(0, h - BAR - 1));
-  tctx.fillStyle = '#39393d'; tctx.fillRect(x + 1, y + 1, wR - 2, BAR - 1);
-  tctx.strokeStyle = 'rgba(255,255,255,.22)'; tctx.stroke();
+  ctx.beginPath(); ctx.roundRect(x, y, wR, h, 9);
+  ctx.fillStyle = '#2b2b2e'; ctx.fill();
+  ctx.fillStyle = p.fill; ctx.fillRect(x + 1, y + BAR, wR - 2, Math.max(0, h - BAR - 1));
+  ctx.fillStyle = '#39393d'; ctx.fillRect(x + 1, y + 1, wR - 2, BAR - 1);
+  ctx.strokeStyle = 'rgba(255,255,255,.22)'; ctx.stroke();
 }
 
 function stepTrails(dt){
   tctx.clearRect(0, 0, tcv.width, tcv.height);
+  fctx.clearRect(0, 0, fcv.width, fcv.height);
   for (let i = PARTS.length - 1; i >= 0; i--){
     const p = PARTS[i];
     p.life += dt;
     if (p.life >= p.ttl){ PARTS.splice(i, 1); continue; }
     p.x += p.vx * dt; p.y += p.vy * dt; p.vy += p.g * dt;
     if (p.kind === 'spark' && ((p.life * 18) | 0) % 2) continue; // twinkle
-    tctx.globalAlpha = (1 - p.life / p.ttl) * p.a0;
-    if (p.kind === 'ghost'){ drawGhostPart(p); }
+    const ctx = p.over ? fctx : tctx;
+    ctx.globalAlpha = (1 - p.life / p.ttl) * p.a0;
+    if (p.kind === 'ghost'){ drawGhostPart(ctx, p); }
     else if (p.crop){
-      try { tctx.drawImage(p.crop.src, p.crop.sx, p.crop.sy, p.crop.ss, p.crop.ss, qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size); } catch(e){}
+      try { ctx.drawImage(p.crop.src, p.crop.sx, p.crop.sy, p.crop.ss, p.crop.ss, qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size); } catch(e){}
     } else {
-      tctx.fillStyle = p.color;
-      tctx.fillRect(qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size);
+      ctx.fillStyle = p.color;
+      ctx.fillRect(qz(p.x, p.grid), qz(p.y, p.grid), p.size, p.size);
     }
   }
-  tctx.globalAlpha = 1;
+  tctx.globalAlpha = 1; fctx.globalAlpha = 1;
 }
 
 /* ---------- auto breath + physics ---------- */
@@ -1487,14 +1497,17 @@ bindSlider('trl','tamt');
 function syncTrailUI(){
   if (!SEL) return;
   const t = effv(SEL,'trail');
-  document.querySelectorAll('#trailsRow .pill').forEach(p => p.classList.toggle('on', p.dataset.t === t));
+  document.querySelectorAll('#trailsRow .pill[data-t]').forEach(p => p.classList.toggle('on', p.dataset.t === t));
+  $('overBtn').classList.toggle('on', effv(SEL,'tover'));
   $('trl').value = effv(SEL,'tamt'); $('trlO').textContent = effv(SEL,'tamt').toFixed(2);
   markLabel('trlL','tamt');
 }
-document.querySelectorAll('#trailsRow .pill').forEach(p => {
+document.querySelectorAll('#trailsRow .pill[data-t]').forEach(p => {
   p.addEventListener('click', () => { setOverride('trail', p.dataset.t); syncTrailUI(); });
   p.addEventListener('dblclick', () => { clearOverride('trail'); syncTrailUI(); });
 });
+$('overBtn').addEventListener('click', () => { setOverride('tover', !effv(SEL,'tover')); syncTrailUI(); });
+$('overBtn').addEventListener('dblclick', () => { clearOverride('tover'); syncTrailUI(); });
 
 function markLabel(labId, key){
   const lab = $(labId); if (!lab || !SEL) return;
