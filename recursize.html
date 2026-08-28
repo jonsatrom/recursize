@@ -145,6 +145,21 @@
   }
   .mini { font:9.5px/1.5 ui-monospace, Menlo, monospace; color:rgba(255,255,255,.3); }
 
+  /* navigator: root tabs + tree listing in controls.cfg */
+  #navTabs { min-height:14px; }
+  .ntab { width:14px; height:14px; border-radius:50%; border:2px solid transparent; cursor:pointer; opacity:.55; flex:0 0 auto; }
+  .ntab:hover { opacity:.85; }
+  .ntab.on { opacity:1; border-color:rgba(255,255,255,.7); }
+  #navTree { max-height:112px; overflow-y:auto; display:flex; flex-direction:column; gap:1px; }
+  .nrow { display:flex; align-items:center; gap:5px; padding:1px 4px; border-radius:4px; cursor:pointer; font:9.5px ui-monospace, Menlo, monospace; color:#9a9aa0; }
+  .nrow:hover { background:rgba(255,255,255,.07); color:#ddd; }
+  .nrow.on { background:rgba(255,255,255,.13); color:#f0f0f2; }
+  .nsw { width:10px; height:10px; border-radius:3px; background:#3a3a3e; background-size:cover; background-position:center; flex:0 0 auto; border:0.5px solid rgba(255,255,255,.15); }
+  .ntk { width:8px; flex:0 0 auto; font-size:8px; line-height:1; }
+  .nlbl { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  @keyframes flashpulse { 0%,100% { outline-color:transparent; } 20%,70% { outline-color:var(--acc,#8ad); } }
+  .win.flash { outline:2.5px solid transparent; outline-offset:5px; animation: flashpulse .85s ease-out; }
+
   /* deploy mode: armed cursor draws windows into whatever surface it's over */
   body.deploy, body.deploy .win, body.deploy .bar, body.deploy .grip, body.deploy .space { cursor: crosshair !important; }
   #ghost {
@@ -164,6 +179,8 @@
 <div id="ctrl">
   <div class="bar" id="ctrlbar"><span id="gdot"></span><span class="ttl">controls.cfg</span><span id="gtag"></span><span class="sp"></span></div>
   <div class="pane">
+    <div class="row" id="navTabs"></div>
+    <div id="navTree"></div>
     <div class="row" id="modes"></div>
     <div class="row">
       <span class="pill warn" id="autoBtn">AUTO</span>
@@ -324,6 +341,7 @@ function updateTk(w){
   else if (w.looping){ t.style.display=''; t.textContent='●'; t.className='bx tk loop'; }
   else if (w.take.length > 1){ t.style.display=''; t.textContent='○'; t.className='bx tk stop'; }
   else { t.style.display='none'; t.className='bx tk'; }
+  if (SEL) renderNav();
 }
 
 function refreshTree(r){
@@ -341,6 +359,7 @@ function refreshTree(r){
   const root = r;
   root.el.style.setProperty('--acc', root.accent);
   renderFills(root);
+  if (SEL) renderNav();
 }
 
 function newRoot(depth, at){
@@ -677,6 +696,7 @@ function setFill(m){
   if (SEL.o.fphase === undefined && eff(SEL,'fphase').owner !== SEL) SEL.o.fphase = effv(SEL,'fphase');
   syncFillUI();
   renderFills(rootOf(SEL));
+  renderNav();
 }
 
 function toggleCyc(){
@@ -1170,7 +1190,60 @@ function syncGroupTag(){
   $('gdot').style.background = root.accent;
   $('gtag').textContent = '— d' + depthOf(SEL) + (root.kids.length || depthOf(SEL) ? '' : ' (bare)');
 }
-function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); syncRecUI(); syncWarpUI(); syncGroupTag(); }
+function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); syncRecUI(); syncWarpUI(); syncGroupTag(); renderNav(); }
+
+/* ---------- navigator: find, select, and surface windows without touching them ---------- */
+
+function flashWin(w){
+  w.el.classList.remove('flash'); void w.el.offsetWidth;
+  w.el.classList.add('flash');
+  setTimeout(() => w.el.classList.remove('flash'), 900);
+}
+
+function renderNav(){
+  if (!SEL) return;
+  const sroot = rootOf(SEL);
+  for (const n of walk(sroot)) n.el.classList.remove('gpeek'); // clear stale hover outlines
+  const tabs = $('navTabs'); tabs.innerHTML = '';
+  roots.forEach((r, i) => {
+    const t = document.createElement('span');
+    t.className = 'ntab' + (r === sroot ? ' on' : '');
+    t.style.background = r.accent;
+    t.title = 'tree ' + (i+1) + ' — click: front + focus';
+    t.addEventListener('click', () => { desk.appendChild(r.el); select(r); flashWin(r); });
+    t.addEventListener('mouseenter', () => { if (r !== rootOf(SEL)) r.el.classList.add('gpeek'); });
+    t.addEventListener('mouseleave', () => r.el.classList.remove('gpeek'));
+    tabs.appendChild(t);
+  });
+  const tree = $('navTree'); tree.innerHTML = '';
+  const addRow = (w, depth, sib) => {
+    const row = document.createElement('div');
+    row.className = 'nrow' + (w === SEL ? ' on' : '');
+    const tk = document.createElement('span'); tk.className = 'ntk';
+    tk.textContent = w.recing ? '●' : w.looping ? '●' : w.take.length > 1 ? '○' : '';
+    tk.style.color = w.recing ? '#e5484d' : w.looping ? sroot.accent : '#77777c';
+    const sw = document.createElement('span'); sw.className = 'nsw';
+    if (w.fillEl.style.background && w.fillEl.style.background !== 'none') sw.style.background = w.fillEl.style.background;
+    if (w.fillEl.style.backgroundImage && w.fillEl.style.backgroundImage !== 'none'){
+      sw.style.backgroundImage = w.fillEl.style.backgroundImage;
+      sw.style.backgroundSize = 'cover'; sw.style.backgroundPosition = 'center';
+    }
+    const lbl = document.createElement('span'); lbl.className = 'nlbl';
+    lbl.textContent = '·'.repeat(depth) + (depth ? ' copy' + (depth > 1 ? ' ' + depth : '') : ' Screen…')
+      + (sib ? ' ' + sib : '') + (w.baked ? ' ⌀' : '');
+    row.append(tk, sw, lbl);
+    row.addEventListener('mouseenter', () => w.el.classList.add('gpeek')); // find it in the pile
+    row.addEventListener('mouseleave', () => w.el.classList.remove('gpeek'));
+    row.addEventListener('click', () => { select(w); flashWin(w); });       // select without re-stacking
+    row.addEventListener('dblclick', () => {                                 // bring to front where it lives
+      if (w.parent) w.parent.space.appendChild(w.el); else desk.appendChild(w.el);
+      flashWin(w);
+    });
+    tree.appendChild(row);
+    w.kids.forEach((k, i) => addRow(k, depth + 1, w.kids.length > 1 ? String.fromCharCode(97 + i) : ''));
+  };
+  addRow(sroot, 0, '');
+}
 
 $('warpScopeBtn').addEventListener('click', () => { warpScope = warpScope === 'tree' ? 'lane' : 'tree'; syncWarpUI(); });
 $('warpScopeBtn').addEventListener('dblclick', () => { if (warpScope === 'tree') clearOverride('warp'); });
@@ -1322,9 +1395,15 @@ document.addEventListener('keydown', e => {
   }
   if (!SEL) return;
   if (k === 't'){ tapTempo(); return; }
-  if (e.key === 'Tab'){ // DFS through the focused tree
+  if (e.key === 'Tab'){
     e.preventDefault();
-    const seq = [...walk(rootOf(SEL))];
+    if (e.shiftKey){ // ⇧Tab cycles trees: front + focus + flash
+      const i = roots.indexOf(rootOf(SEL));
+      const r = roots[(i + 1) % roots.length];
+      desk.appendChild(r.el); select(r); flashWin(r);
+      return;
+    }
+    const seq = [...walk(rootOf(SEL))]; // Tab = DFS through the focused tree
     select(seq[(seq.indexOf(SEL) + 1) % seq.length]);
     return;
   }
@@ -1373,7 +1452,8 @@ document.addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
 addEventListener('blur', () => held.clear());
 
 $('hint').textContent =
-  '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · WASD move · C center · ⇧C center subtree\n' +
+  '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
+  'panel navigator: hover a row = find it on stage · click = select (no re-stack) · dblclick = bring to front · tabs = trees\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
   '⊕ = window inside · ⇧⊕ = engulf kids · ⊗ = close (kids promote; a root’s kids go free) · controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
   'looper: R arms · grab = record · release = loop · TAP/T = tap tempo · W:TREE↔W:LANE clocks · P lanes · B boom · E ease · ESC cut';
