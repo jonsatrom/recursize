@@ -1,0 +1,1404 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<title>recursize</title>
+<style>
+  :root { --bar: 26px; }
+  * { margin:0; padding:0; box-sizing:border-box; -webkit-user-select:none; user-select:none; }
+  html,body { width:100%; height:100%; overflow:hidden; }
+  body {
+    background:
+      radial-gradient(1200px 800px at 30% 20%, #1d1d20 0%, #131315 60%, #0e0e10 100%);
+    font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+    color:#ccc;
+    touch-action:none;
+  }
+  body::before {
+    content:""; position:fixed; inset:0; pointer-events:none;
+    background-image: radial-gradient(rgba(255,255,255,.045) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  #desk { position:fixed; inset:0; }
+  #wordmark {
+    position:fixed; top:10px; left:14px; font:10px/1 ui-monospace, Menlo, monospace;
+    color:rgba(255,255,255,.22); letter-spacing:.14em; pointer-events:none;
+  }
+  #hint {
+    position:fixed; left:14px; bottom:10px; font:10px/1.7 ui-monospace, Menlo, monospace;
+    color:rgba(255,255,255,.28); pointer-events:none; white-space:pre;
+  }
+
+  /* ---------- window chrome (screenshot-preview-ish) ---------- */
+  .win {
+    position:absolute;
+    background:#2b2b2e;
+    border:0.5px solid rgba(255,255,255,.22);
+    border-radius:10px;
+    box-shadow: 0 14px 44px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.4);
+    overflow:hidden;
+    /* generational rot compounds down the tree; --rot overrides cascade like any param */
+    filter: blur(calc(var(--rot,0.4) * 0.32px)) contrast(calc(1 + var(--rot,0.4) * 0.055)) saturate(calc(1 - var(--rot,0.4) * 0.05));
+  }
+  .win.shake { animation: shake .3s; }
+  @keyframes shake { 25%{transform:translateX(-5px)} 50%{transform:translateX(4px)} 75%{transform:translateX(-2px)} }
+
+  .win.gdim { opacity:.82; }                                   /* tree not holding the selection */
+  .win.gpeek { outline:1.5px dashed var(--acc,#8ad); outline-offset:4px; }
+
+  .bar {
+    position:absolute; left:0; top:0; right:0; height:var(--bar);
+    display:flex; align-items:center; gap:6px; padding:0 9px;
+    background:linear-gradient(#39393d, #333336);
+    border-bottom:0.5px solid rgba(0,0,0,.45);
+    cursor:grab; font-size:11px; color:#b6b6ba;
+  }
+  .bar:active { cursor:grabbing; }
+  .bx {
+    width:15px; height:15px; flex:0 0 auto; border-radius:50%;
+    display:flex; align-items:center; justify-content:center;
+    color:#8e8e93; font-size:12px; line-height:1; cursor:pointer;
+  }
+  .bx:hover { color:#eee; background:rgba(255,255,255,.12); }
+  .tk { width:13px; height:13px; font-size:10px; }
+  .tk.rec { color:#e5484d; animation: blink 1s steps(2) infinite; }
+  .tk.loop { color:var(--acc,#8ad); }
+  .tk.stop { color:#77777c; }
+  .ttl {
+    flex:0 1 auto; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+    color:#c9c9cd; pointer-events:none; max-width:44%;
+  }
+  .sp { flex:1; }
+  .owp {
+    flex:0 0 auto; font-size:11px; color:#a5a5aa; cursor:pointer;
+    padding:2px 7px; border-radius:5px; white-space:nowrap;
+  }
+  .owp:hover { background:rgba(255,255,255,.1); color:#e8e8ea; }
+  .win.baked > .bar .owp { color:#e6b35a; background:rgba(230,179,90,.12); }
+
+  .space {
+    position:absolute; left:0; top:var(--bar); right:0; bottom:0;
+    background:
+      linear-gradient(160deg, rgba(255,255,255,.03), rgba(0,0,0,.12)),
+      #232326;
+    background-image: radial-gradient(rgba(255,255,255,.05) 1px, transparent 1px),
+      linear-gradient(160deg, rgba(255,255,255,.03), rgba(0,0,0,.12));
+    background-size: 18px 18px, auto;
+    transform-origin: 0 0;
+  }
+  .win.baked > .space { pointer-events:none; filter: blur(.5px) contrast(1.07) saturate(.92); }
+
+  .grip {
+    position:absolute; right:0; bottom:0; width:20px; height:20px;
+    cursor:nwse-resize; z-index:5;
+  }
+  .grip::after {
+    content:""; position:absolute; right:4px; bottom:4px; width:9px; height:9px;
+    background:
+      linear-gradient(135deg, transparent 0 42%, rgba(255,255,255,.35) 42% 52%, transparent 52% 72%, rgba(255,255,255,.35) 72% 82%, transparent 82%);
+  }
+
+  .win.sel { border-color: rgba(255,255,255,.55); }
+  .win.sel > .bar .ttl { color:#f2f2f4; }
+  .fill { position:absolute; inset:0; pointer-events:none; background-position:center; background-size:cover; overflow:hidden; }
+  .fill video { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+  .fossil.hide { display:none; }
+
+  .fossil {
+    position:absolute; inset:8px;
+    background:
+      repeating-conic-gradient(#3a3a3e 0 25%, #2e2e31 0 50%);
+    background-size:14px 14px;
+    border-radius:6px; opacity:.5;
+  }
+
+  /* ---------- controls ---------- */
+  #ctrl {
+    position:absolute; width:240px;
+    background:#28282b; border:0.5px solid rgba(255,255,255,.22); border-radius:10px;
+    box-shadow:0 14px 44px rgba(0,0,0,.55); overflow:hidden; z-index:99999;
+    font-size:11px;
+  }
+  #ctrl .bar { cursor:grab; }
+  #gdot { width:8px; height:8px; border-radius:50%; background:#888; flex:0 0 auto; }
+  #gtag { font:10px ui-monospace, Menlo, monospace; color:#8f8f95; }
+  #ctrl .pane { margin-top:var(--bar); padding:9px 10px 11px; display:flex; flex-direction:column; gap:9px; }
+  .row { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .pill {
+    padding:3px 8px; border-radius:99px; border:1px solid rgba(255,255,255,.16);
+    color:#9a9aa0; cursor:pointer; font-size:10.5px; letter-spacing:.03em;
+  }
+  .pill:hover { color:#ddd; border-color:rgba(255,255,255,.35); }
+  .pill.on { color:#111; background:#d8d8dc; border-color:#d8d8dc; }
+  .pill.warn.on { background:#e6b35a; border-color:#e6b35a; }
+  .pill.rec.on { background:#e5484d; border-color:#e5484d; color:#fff; animation: blink 1s steps(2) infinite; }
+  @keyframes blink { 50% { opacity:.55; } }
+  .sl { display:grid; grid-template-columns:46px 1fr 30px; align-items:center; gap:7px; color:#8f8f95; }
+  .sl label { font:10px ui-monospace, Menlo, monospace; letter-spacing:.06em; cursor:pointer; }
+  .sl label.ovr { color:#e0e0e4; } /* • param overridden at the selected window */
+  .sl output { font:9.5px ui-monospace, Menlo, monospace; text-align:right; color:#6f6f75; }
+  input[type=range] { -webkit-appearance:none; appearance:none; height:3px; background:rgba(255,255,255,.18); border-radius:2px; outline:none; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance:none; appearance:none; width:12px; height:12px; border-radius:50%;
+    background:#cfcfd4; border:none; cursor:ew-resize;
+  }
+  .mini { font:9.5px/1.5 ui-monospace, Menlo, monospace; color:rgba(255,255,255,.3); }
+
+  /* deploy mode: armed cursor draws windows into whatever surface it's over */
+  body.deploy, body.deploy .win, body.deploy .bar, body.deploy .grip, body.deploy .space { cursor: crosshair !important; }
+  #ghost {
+    position:fixed; display:none; pointer-events:none; z-index:999999;
+    border:1.5px dashed rgba(255,255,255,.7); border-radius:10px;
+    background:rgba(255,255,255,.06);
+    box-shadow: 0 8px 30px rgba(0,0,0,.4);
+  }
+</style>
+</head>
+<body>
+<div id="desk"></div>
+<div id="ghost"></div>
+<div id="wordmark">RECURSIZE</div>
+<div id="hint"></div>
+
+<div id="ctrl">
+  <div class="bar" id="ctrlbar"><span id="gdot"></span><span class="ttl">controls.cfg</span><span id="gtag"></span><span class="sp"></span></div>
+  <div class="pane">
+    <div class="row" id="modes"></div>
+    <div class="row">
+      <span class="pill warn" id="autoBtn">AUTO</span>
+      <span class="pill" id="symBtn">⌥ SYM</span>
+      <span class="pill" id="propBtn">⇧ PROP</span>
+    </div>
+    <div class="row" id="fills">
+      <span class="pill" data-f="none">none</span>
+      <span class="pill" data-f="rainbow">rbow</span>
+      <span class="pill" data-f="random">rnd</span>
+      <span class="pill" data-f="palette">pal…</span>
+      <span class="pill" data-f="imgs">media…</span>
+    </div>
+    <div class="row">
+      <span class="pill" id="ordBtn">SEQ</span>
+      <span class="pill" id="stepB">◀</span>
+      <span class="pill warn" id="cycBtn">CYC</span>
+      <span class="pill" id="stepF">▶</span>
+      <span class="pill" id="tapBtn">TAP</span>
+    </div>
+    <div class="sl"><label id="rateL" data-k="frate">RATE</label><input type="range" id="rateSl" min="0" max="1" step="0.01" value="0.45"><output id="rateO"></output></div>
+    <div class="row">
+      <span class="pill rec" id="recBtn">● REC</span>
+      <span class="pill warn" id="takeBtn">▶ TAKE</span>
+      <span class="pill" id="boomBtn">⇄ BOOM</span>
+    </div>
+    <div class="sl"><label id="warpScopeBtn" title="click: TREE ↔ LANE">W:TREE</label><input type="range" id="warpSl" min="0" max="1" step="0.005" value="0.684"><output id="warpO"></output></div>
+    <input type="file" id="imgIn" multiple accept="image/*,video/*" style="display:none">
+    <input type="file" id="palIn" accept=".hex,.txt,.csv,.gpl,.pal,text/plain" style="display:none">
+    <div class="sl"><label id="feelL" data-k="feel">FEEL</label><input type="range" id="feel" min="0" max="1" step="0.01" value="0.45"><output id="feelO"></output></div>
+    <div class="sl"><label id="lagL" data-k="lag">LAG</label><input type="range" id="lag" min="0" max="1" step="0.01" value="0.4"><output id="lagO"></output></div>
+    <div class="sl"><label id="chaosL" data-k="chaos">CHAOS</label><input type="range" id="chaos" min="0" max="1" step="0.01" value="0.5"><output id="chaosO"></output></div>
+    <div class="sl"><label id="rotL" data-k="rot">ROT</label><input type="range" id="rot" min="0" max="1" step="0.01" value="0.4"><output id="rotO"></output></div>
+    <div class="row">
+      <span class="pill" id="addIn">⊕ INSIDE</span>
+      <span class="pill" id="closeSel">⊗ CLOSE</span>
+    </div>
+    <div class="row">
+      <span class="pill" id="newwin">+ WIN</span>
+      <span class="pill" id="reset">RESET</span>
+    </div>
+    <div class="mini">controls cascade from the selected window down.<br>• label = set here · dblclick label = inherit again.</div>
+  </div>
+</div>
+
+<script>
+'use strict';
+/* recursize — every window is a group from its own point of view.
+   the desk holds root windows; any window holds any number of children.
+   params cascade: set at a window, inherited by its subtree until overridden
+   deeper (CSS for behavior). lanes (loops) and bakes stay per-window.
+   the looper arms per root tree. */
+
+const BAR = 26, MIN_W = 96, MIN_H = 66, EDGE = 3;
+const desk = document.getElementById('desk');
+const VW = () => innerWidth, VH = () => innerHeight;
+
+const MODES = ['drag','nsync','ripple','unsync','random'];
+const MODE_LABEL = { drag:'DRAG', nsync:'*NSYNC', ripple:'RIPPLE', unsync:'UNSYNC', random:'RANDOM' };
+const ACCENTS = ['#7dd6ff','#ff8ad8','#b6f36a','#ffc069','#c9a8ff','#7affc9'];
+
+const DEFAULTS = {
+  mode:'drag', auto:false, feel:.45, lag:.4, chaos:.5, rot:.4, warp:1,
+  fill:'none', forder:'seq', frate:2, fplay:false, fphase:0,
+  media:[], pal:[], rndc:[],
+};
+
+const roots = [];
+let SEL = null;           // the selected window — controls scope to its subtree
+let rootSeq = 0;
+let G = null;             // active pointer gesture
+let time = 0;
+const held = new Set();
+const L = { sym:false, prop:false };
+let peeked = null;
+let warpScope = 'tree';   // 'tree' = warp override at SEL (cascades) · 'lane' = SEL's own loop clock
+
+/* ---------- tree helpers ---------- */
+
+const clamp = (v,a,b) => Math.min(b, Math.max(a, v));
+const rootOf = w => { while (w.parent) w = w.parent; return w; };
+const depthOf = w => { let d = 0; for (let n = w.parent; n; n = n.parent) d++; return d; };
+function* walk(w){ yield w; for (const k of w.kids) yield* walk(k); }
+function* walkAll(){ for (const r of roots) yield* walk(r); }
+const frozen = w => { for (let n = w.parent; n; n = n.parent) if (n.baked) return true; return false; };
+const maxDepthBelow = w => { let m = 0; for (const n of walk(w)) m = Math.max(m, depthOf(n)); return m - depthOf(w); };
+
+function eff(w, k){ // cascade resolution: nearest override up the ancestry wins
+  let d = 0;
+  for (let n = w; n; n = n.parent, d++)
+    if (n.o[k] !== undefined) return { v:n.o[k], d, owner:n };
+  return { v:DEFAULTS[k], d:depthOf(w), owner:rootOf(w) };
+}
+const effv = (w,k) => eff(w,k).v;
+
+/* ---------- window construction ---------- */
+
+function title(d){ return d === 0 ? 'Screen….png' : ('Screen… copy' + (d > 1 ? ' ' + d : '') + '.png'); }
+
+function mkWin(rect, parent){
+  const el = document.createElement('div'); el.className = 'win';
+  el.innerHTML =
+    '<div class="bar"><span class="bx close">⊗</span><span class="bx add">⊕</span><span class="bx tk" style="display:none"></span><span class="ttl"></span><span class="sp"></span><span class="owp">Open with Preview</span></div>' +
+    '<div class="space"><div class="fill"></div></div><div class="grip"></div>';
+  const w = {
+    parent: parent || null, kids: [],
+    o: {},                                        // cascading overrides
+    x:rect.x, y:rect.y, w:rect.w, h:rect.h,
+    bx:rect.x, by:rect.y, bw:rect.w, bh:rect.h,
+    vx:0, vy:0, vw:0, vh:0,
+    baked:false, nw:0, nh:0,
+    take:[], recing:false, looping:false, playhead:0, pdir:1, recAcc:0, lwarp:1, prevTake:null,
+    cycAcc:0, shufSeed:(Math.random()*997)|0,
+    // root-only fields (harmless elsewhere)
+    accent:null, armed:false, boom:false,
+    ptake:[], precing:false, ploop:false, pplayhead:0, ppdir:1, precAcc:0, easing:false,
+    el, bar:el.querySelector('.bar'), space:el.querySelector('.space'),
+    fillEl:el.querySelector('.fill'), fillVid:null, tk:el.querySelector('.tk'),
+    ttl:el.querySelector('.ttl'), owp:el.querySelector('.owp'),
+    seed:[...Array(8)].map(()=>Math.random()*Math.PI*2),
+    frq:[...Array(4)].map(()=>0.35 + Math.random()*0.8),
+  };
+  el._win = w;
+  el.querySelector('.grip').addEventListener('pointerdown', e => startResize(e, w));
+  w.bar.addEventListener('pointerdown', e => { if (!e.target.closest('.bx,.owp')) startMove(e, w); });
+  w.space.addEventListener('pointerdown', e => {
+    if (e.target === w.space || e.target.classList.contains('fill') || e.target.classList.contains('fossil')){
+      e.stopPropagation();
+      select(w);
+    }
+  });
+  const closeB = el.querySelector('.close'), addB = el.querySelector('.add');
+  closeB.addEventListener('pointerdown', e => e.stopPropagation());
+  closeB.addEventListener('click', e => { e.stopPropagation(); closeWin(w); });
+  addB.addEventListener('pointerdown', e => e.stopPropagation());
+  addB.addEventListener('click', e => { e.stopPropagation(); e.shiftKey ? wrapKids(w) : addChild(w); });
+  w.owp.addEventListener('pointerdown', e => e.stopPropagation());
+  w.owp.addEventListener('click', e => { e.stopPropagation(); toggleBake(w); });
+  w.tk.addEventListener('pointerdown', e => e.stopPropagation());
+  w.tk.addEventListener('click', e => {
+    e.stopPropagation();
+    if (w.recing || w.take.length < 2) return;
+    w.looping = !w.looping;
+    if (w.looping){ w.playhead = 0; w.pdir = 1; }
+    updateTk(w); syncRecUI();
+  });
+  w.tk.addEventListener('dblclick', e => {
+    e.stopPropagation();
+    w.take = []; w.looping = false; w.recing = false;
+    updateTk(w); syncRecUI();
+  });
+  return w;
+}
+
+function updateTk(w){
+  const t = w.tk;
+  if (w.recing){ t.style.display=''; t.textContent='●'; t.className='bx tk rec'; }
+  else if (w.looping){ t.style.display=''; t.textContent='●'; t.className='bx tk loop'; }
+  else if (w.take.length > 1){ t.style.display=''; t.textContent='○'; t.className='bx tk stop'; }
+  else { t.style.display='none'; t.className='bx tk'; }
+}
+
+function refreshTree(r){
+  for (const w of walk(r)){
+    w.ttl.textContent = title(depthOf(w)) + (w.baked ? '  (baked)' : '');
+    const f = w.space.querySelector(':scope > .fossil'); if (f) f.remove();
+    if (!w.kids.length){
+      const fossil = document.createElement('div'); fossil.className = 'fossil';
+      w.space.prepend(fossil);
+    }
+    if (w.o.rot !== undefined) w.el.style.setProperty('--rot', w.o.rot);
+    else if (w.parent) w.el.style.removeProperty('--rot');
+    else w.el.style.setProperty('--rot', DEFAULTS.rot);
+  }
+  const root = r;
+  root.el.style.setProperty('--acc', root.accent);
+  renderFills(root);
+}
+
+function newRoot(depth, at){
+  const rw = Math.max(340, Math.min(680, VW()*0.55)), rh = Math.max(300, Math.min(500, VH()*0.6));
+  let rect = at || { x:(VW()-rw)*0.4 + roots.length*46, y:(VH()-rh)*0.4 + roots.length*38, w:rw, h:rh };
+  if (depth === 1){ rect = at || { x:(VW()-380)*0.35 + roots.length*46, y:(VH()-300)*0.35 + roots.length*38, w:380, h:300 }; }
+  const root = mkWin(rect, null);
+  root.accent = ACCENTS[(rootSeq++) % ACCENTS.length];
+  desk.appendChild(root.el);
+  roots.push(root);
+  let p = root;
+  for (let i = 1; i < depth; i++){
+    const cw = Math.max(MIN_W, p.bw*0.68), ch = Math.max(MIN_H, (p.bh-BAR)*0.66);
+    const k = mkWin({ x:(p.bw-cw)*0.5 + 10, y:((p.bh-BAR)-ch)*0.35 + 8, w:cw, h:ch }, p);
+    p.space.appendChild(k.el); p.kids.push(k);
+    p = k;
+  }
+  refreshTree(root);
+  select(p);
+  step(0);
+  return root;
+}
+
+function addChild(w){ // ⊕ — a new window inside, alongside any existing kids
+  if (frozen(w) || w.baked && false) {} // baked windows can still be given kids? no:
+  if (frozen(w)) return;
+  if ([...walk(rootOf(w))].length >= 40) return;
+  const cw = Math.max(MIN_W, w.w*0.55), ch = Math.max(MIN_H, (w.h-BAR)*0.5);
+  const n = w.kids.length;
+  const k = mkWin({ x: clamp(14 + n*24, EDGE, Math.max(EDGE, w.w - cw - EDGE)),
+                    y: clamp(10 + n*18, EDGE, Math.max(EDGE, w.h - BAR - ch - EDGE)),
+                    w: cw, h: ch }, w);
+  k.w = 24; k.h = 20; // pop in
+  w.space.appendChild(k.el); w.kids.push(k);
+  refreshTree(rootOf(w));
+  select(k);
+}
+
+function wrapKids(w){ // ⇧⊕ — engulf: wrap all current kids in one new window
+  if (frozen(w)) return;
+  if (!w.kids.length){ addChild(w); return; }
+  let x1=1e9,y1=1e9,x2=-1e9,y2=-1e9;
+  w.kids.forEach(k => { x1=Math.min(x1,k.x); y1=Math.min(y1,k.y); x2=Math.max(x2,k.x+k.w); y2=Math.max(y2,k.y+k.h); });
+  const rect = { x:Math.max(EDGE,x1-14), y:Math.max(EDGE,y1-BAR-10), w:(x2-x1)+28, h:(y2-y1)+BAR+20 };
+  const n = mkWin(rect, w);
+  const olds = w.kids; w.kids = [n];
+  olds.forEach(k => {
+    k.parent = n;
+    k.x -= rect.x; k.y -= rect.y + BAR; k.bx = k.x; k.by = k.y;
+    n.space.appendChild(k.el);
+  });
+  n.kids = olds;
+  w.space.appendChild(n.el);
+  refreshTree(rootOf(w));
+  select(n);
+}
+
+function closeWin(w){
+  const p = w.parent, root = rootOf(w);
+  if (!p && roots.length === 1 && !w.kids.length){
+    w.el.classList.remove('shake'); void w.el.offsetWidth; w.el.classList.add('shake'); return;
+  }
+  if (w.baked) toggleBake(w);
+  const kids = w.kids;
+  // bequest: promoted kids inherit the dead window's overrides they don't own,
+  // so a cycle/fill/mode survives the teardown of its home
+  kids.forEach(k => { for (const key in w.o) if (k.o[key] === undefined) k.o[key] = w.o[key]; });
+  if (p){
+    kids.forEach(k => {
+      k.parent = p;
+      k.x += w.x + EDGE; k.y += w.y + BAR; k.bx = k.x; k.by = k.y;
+      p.space.appendChild(k.el);
+      p.kids.push(k);
+    });
+    p.kids = p.kids.filter(k => k !== w);
+    w.el.remove();
+    refreshTree(root);
+    select(p);
+  } else { // closing a root: kids scatter into independent trees
+    const ri = roots.indexOf(w);
+    kids.forEach(k => {
+      k.parent = null;
+      k.x += w.x + EDGE; k.y += w.y + BAR; k.bx = k.x; k.by = k.y;
+      k.accent = ACCENTS[(rootSeq++) % ACCENTS.length];
+      desk.appendChild(k.el);
+      roots.push(k);
+      refreshTree(k);
+    });
+    roots.splice(ri, 1);
+    w.el.remove();
+    if (peeked === w) peeked = null;
+    if (!roots.length){ newRoot(5); return; }
+    select(kids[0] || roots[roots.length-1]);
+  }
+}
+
+function toggleBake(w){
+  if (!w.baked){
+    w.baked = true; w.nw = w.w; w.nh = w.h;
+    w.el.classList.add('baked');
+  } else {
+    w.baked = false;
+    w.el.classList.remove('baked');
+    w.space.style.transform = ''; w.space.style.width = ''; w.space.style.height = '';
+  }
+  refreshTree(rootOf(w));
+}
+
+function select(w){
+  if (!w) return;
+  SEL = w;
+  const sroot = rootOf(w);
+  for (const r of roots){
+    r.el.classList.toggle('gdim', r !== sroot);
+    if (r === sroot) r.el.classList.remove('gpeek');
+    for (const n of walk(r)) n.el.classList.toggle('sel', n === SEL);
+  }
+  syncAllUI();
+}
+
+function centerWin(w){
+  if (!w) return;
+  if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
+  if (!w.parent){ w.bx = (VW() - w.bw)/2; w.by = (VH() - w.bh)/2; }
+  else {
+    const p = w.parent;
+    w.bx = ((p.w - EDGE*2) - w.bw)/2 + EDGE;
+    w.by = ((p.h - BAR - EDGE*2) - w.bh)/2 + EDGE;
+  }
+}
+
+/* ---------- gestures ---------- */
+
+function mods(e){ return { sym: L.sym, prop: e.shiftKey || L.prop }; }
+
+function ancestryPath(w){ const a = []; for (let n = w.parent; n; n = n.parent) a.push(n); return a; } // nearest first
+
+function grabLane(w){
+  const root = rootOf(w);
+  if (root.armed){
+    w.prevTake = w.take; w.prevLooping = w.looping;
+    w.recing = true; w.looping = false;
+    w.take = [[w.bx, w.by, w.bw, w.bh]]; w.recAcc = 0;
+  } else if (w.looping){
+    w.looping = false;
+  }
+  updateTk(w); syncRecUI();
+}
+
+function snapTree(root){
+  const m = new Map();
+  for (const n of walk(root)) m.set(n, { x:n.bx, y:n.by, w:n.bw, h:n.bh });
+  return m;
+}
+
+function startResize(e, w){
+  e.stopPropagation(); e.preventDefault();
+  select(w);
+  if (frozen(w)) return;
+  grabLane(w);
+  const root = rootOf(w);
+  G = {
+    kind:'resize', w, root, px:e.clientX, py:e.clientY, moved:false,
+    start: snapTree(root),
+    sfUp: [], sfDown: [],                      // ripple smoothed factors by tree distance
+    rnd: new Map([...walk(root)].map(n => [n, { x:(Math.random()*2.6-1.3), y:(Math.random()*2.6-1.3) }])),
+    fx:1, fy:1,
+  };
+  e.target.setPointerCapture(e.pointerId);
+  e.target.addEventListener('pointermove', moveResize);
+  e.target.addEventListener('pointerup', endGesture, { once:true });
+  e.target.addEventListener('pointercancel', endGesture, { once:true });
+}
+
+function moveResize(e){
+  if (!G || G.kind !== 'resize') return;
+  const w = G.w, st = G.start.get(w);
+  const m = mods(e);
+  let dx = e.clientX - G.px, dy = e.clientY - G.py;
+  if (Math.abs(dx) + Math.abs(dy) > 3) G.moved = true;
+  let nw, nh, nx = st.x, ny = st.y;
+  if (m.prop){
+    const s = Math.max((st.w + (m.sym?2:1)*dx)/st.w, (st.h + (m.sym?2:1)*dy)/st.h);
+    nw = st.w*s; nh = st.h*s;
+  } else {
+    nw = st.w + (m.sym?2:1)*dx;
+    nh = st.h + (m.sym?2:1)*dy;
+  }
+  nw = Math.max(MIN_W, nw); nh = Math.max(MIN_H, nh);
+  if (m.sym){ nx = st.x - (nw - st.w)/2; ny = st.y - (nh - st.h)/2; }
+  w.bw = nw; w.bh = nh; w.bx = nx; w.by = ny;
+  w.w = nw; w.h = nh; w.x = nx; w.y = ny; w.vw = w.vh = w.vx = w.vy = 0;
+  G.fx = nw/st.w; G.fy = nh/st.h;
+  const mode = effv(w,'mode');
+  if (mode === 'nsync' || mode === 'unsync' || mode === 'random') applyFactorsInstant(mode);
+  pushAncestors(w);
+}
+
+function factorAt(mode, dist, f){ // dist ≥ 1 along lineage
+  if (mode === 'nsync') return f;
+  if (mode === 'unsync') return dist % 2 ? 1/f : f;
+  return f;
+}
+
+function applyToLineage(fn){ // fn(node, dist, isAncestor) over ancestors + descendants of G.w
+  ancestryPath(G.w).forEach((n, i) => fn(n, i+1, true));
+  const base = depthOf(G.w);
+  for (const n of walk(G.w)){ if (n === G.w) continue; fn(n, depthOf(n) - base, false); }
+}
+
+function applyFactorsInstant(mode){
+  applyToLineage((n, d) => {
+    if (frozen(n) || n.baked && false) {}
+    if (frozen(n)) return;
+    const st = G.start.get(n); if (!st) return;
+    let gx, gy;
+    if (mode === 'random'){ const r = G.rnd.get(n); gx = Math.pow(G.fx, r.x); gy = Math.pow(G.fy, r.y); }
+    else { gx = factorAt(mode, d, G.fx); gy = factorAt(mode, d, G.fy); }
+    setScaled(n, st, gx, gy);
+  });
+}
+
+function setScaled(n, st, gx, gy){
+  const nw = clamp(st.w * gx, MIN_W, 4200), nh = clamp(st.h * gy, MIN_H, 4200);
+  n.bw = nw; n.bh = nh;
+  n.bx = st.x + (st.w - nw)/2;
+  n.by = st.y + (st.h - nh)/2;
+}
+
+function startMove(e, w){
+  e.stopPropagation(); e.preventDefault();
+  select(w);
+  if (frozen(w)) return;
+  grabLane(w);
+  G = { kind:'move', w, root:rootOf(w), px:e.clientX, py:e.clientY, sx:w.bx, sy:w.by, moved:false };
+  e.target.setPointerCapture(e.pointerId);
+  e.target.addEventListener('pointermove', moveMove);
+  e.target.addEventListener('pointerup', endGesture, { once:true });
+  e.target.addEventListener('pointercancel', endGesture, { once:true });
+}
+
+function moveMove(e){
+  if (!G || G.kind !== 'move') return;
+  const w = G.w;
+  if (Math.abs(e.clientX - G.px) + Math.abs(e.clientY - G.py) > 3) G.moved = true;
+  w.bx = G.sx + e.clientX - G.px;
+  w.by = G.sy + e.clientY - G.py;
+  w.x = w.bx; w.y = w.by; w.vx = w.vy = 0;
+}
+
+function endGesture(e){
+  e.target.removeEventListener('pointermove', moveResize);
+  e.target.removeEventListener('pointermove', moveMove);
+  if (G && G.w){
+    const w = G.w;
+    if (w.recing){
+      w.recing = false;
+      if (w.take.length > 1 && G.moved){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+      else {
+        w.take = w.prevTake || [];
+        if (w.take.length > 1 && w.prevLooping){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+      }
+      w.prevTake = null;
+      updateTk(w); syncRecUI();
+    }
+  }
+  G = null;
+}
+
+function pushAncestors(w){ // a swelling window shoves its whole lineage bigger
+  let c = w;
+  for (let p = w.parent; p; c = p, p = p.parent){
+    const needW = Math.max(c.x + c.w, c.bx + c.bw) + EDGE*2;
+    const needH = BAR + Math.max(c.y + c.h, c.by + c.bh) + EDGE*2;
+    p.bw = Math.max(p.bw, needW);
+    p.bh = Math.max(p.bh, needH);
+  }
+}
+
+/* ---------- fills (cascading media) ---------- */
+
+function hueWheel(n){ return [...Array(Math.max(1,n))].map((_,i)=>`hsl(${Math.round(360*i/Math.max(1,n))} 85% 55%)`); }
+
+function poolFor(w, mode){
+  if (mode === 'rainbow'){ const o = eff(w,'fill').owner || rootOf(w); return hueWheel(Math.max(maxDepthBelow(o) + 1, 6)).map(c => ({c})); } // floor 6: a lone window still cycles
+  if (mode === 'random')  return effv(w,'rndc').map(c => ({c}));
+  if (mode === 'palette') return effv(w,'pal').map(c => ({c}));
+  if (mode === 'imgs')    return effv(w,'media');
+  return [];
+}
+
+function renderFills(root){
+  for (const w of walk(root)){
+    const fossil = w.space.querySelector(':scope > .fossil');
+    const fm = eff(w,'fill');
+    if (fossil) fossil.classList.toggle('hide', fm.v !== 'none');
+    const f = w.fillEl;
+    if (fm.v === 'none'){ setFillNone(w); continue; }
+    const p = poolFor(w, fm.v), m = p.length;
+    if (!m){ setFillNone(w); continue; }
+    const order = effv(w,'forder');
+    const shufOwner = fm.owner || rootOf(w);
+    const slot = order === 'seq' ? fm.d : (fm.d * 5381 + shufOwner.shufSeed) % m;
+    const phase = effv(w,'fphase');
+    const item = p[(((slot + phase) % m) + m) % m];
+    if (item.vid){
+      f.style.background = '#141416'; f.style.backgroundImage = 'none';
+      if (!w.fillVid){ w.fillVid = document.createElement('video'); w.fillVid.muted = true; w.fillVid.loop = true; w.fillVid.playsInline = true; f.appendChild(w.fillVid); }
+      if (w.fillVid.dataset.src !== item.url){ w.fillVid.dataset.src = item.url; w.fillVid.src = item.url; w.fillVid.play().catch(()=>{}); }
+      w.fillVid.style.display = '';
+    } else {
+      if (w.fillVid) w.fillVid.style.display = 'none';
+      if (item.url){
+        f.style.background = '#141416';
+        f.style.backgroundImage = `url(${item.url})`;
+        f.style.backgroundSize = 'cover'; f.style.backgroundPosition = 'center';
+      } else {
+        f.style.backgroundImage = 'none';
+        f.style.background = item.c;
+      }
+    }
+  }
+}
+function setFillNone(w){
+  w.fillEl.style.background = 'none'; w.fillEl.style.backgroundImage = 'none';
+  if (w.fillVid) w.fillVid.style.display = 'none';
+}
+
+function setFill(m){
+  if (!SEL) return;
+  SEL.o.fill = m;
+  if (m === 'random' && !effv(SEL,'rndc').length)
+    SEL.o.rndc = [...Array(12)].map(()=>`hsl(${(Math.random()*360)|0} ${(70+Math.random()*25)|0}% ${(45+Math.random()*15)|0}%)`);
+  if (SEL.o.fphase === undefined && eff(SEL,'fphase').owner !== SEL) SEL.o.fphase = effv(SEL,'fphase');
+  syncFillUI();
+  renderFills(rootOf(SEL));
+}
+
+function toggleCyc(){
+  if (!SEL) return;
+  if (!effv(SEL,'fplay') && effv(SEL,'fill') === 'none') setFill('rainbow');
+  SEL.o.fplay = !effv(SEL,'fplay');
+  if (SEL.o.fphase === undefined) SEL.o.fphase = effv(SEL,'fphase');
+  rootOf(SEL).easing = false;
+  syncCycUI();
+}
+
+/* ---------- looper: a lane per window, armed per tree ---------- */
+
+function toggleArm(root){
+  root.armed = !root.armed;
+  if (root.armed){
+    root.ptake = []; root.precing = true; root.precAcc = 0; root.ploop = false;
+    if (G && G.root === root){ // punch-in
+      const w = G.w;
+      w.prevTake = w.take; w.prevLooping = w.looping;
+      w.recing = true; w.looping = false;
+      w.take = [[w.bx, w.by, w.bw, w.bh]]; w.recAcc = 0;
+      updateTk(w);
+    }
+  } else {
+    for (const w of walk(root)){
+      if (w.recing){
+        w.recing = false;
+        if (w.take.length > 1){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+        else if (w.prevTake && w.prevTake.length > 1){
+          w.take = w.prevTake;
+          if (w.prevLooping){ w.looping = true; w.playhead = 0; w.pdir = 1; }
+        }
+        w.prevTake = null;
+        updateTk(w);
+      }
+    }
+    root.precing = false;
+    if (root.ptake.length > 1 && paramsVaried(root.ptake)){ root.ploop = true; root.pplayhead = 0; root.ppdir = 1; }
+    else root.ptake = [];
+  }
+  syncRecUI();
+}
+
+function rootParams(root){
+  return { feel:effv(root,'feel'), lag:effv(root,'lag'), chaos:effv(root,'chaos'),
+           rot:effv(root,'rot'), mode:effv(root,'mode'), auto:effv(root,'auto') };
+}
+function paramsVaried(t){
+  const a = t[0];
+  return t.some(f => f.mode !== a.mode || f.auto !== a.auto ||
+    Math.abs(f.feel-a.feel) + Math.abs(f.lag-a.lag) + Math.abs(f.chaos-a.chaos) + Math.abs(f.rot-a.rot) > 0.01);
+}
+
+function masterTake(root){
+  if (root.armed) toggleArm(root);
+  const lanes = [...walk(root)].filter(w => w.take.length > 1);
+  const any = lanes.some(w => w.looping) || root.ploop;
+  if (any){
+    lanes.forEach(w => { w.looping = false; updateTk(w); });
+    root.ploop = false;
+  } else {
+    lanes.forEach(w => { w.looping = true; w.playhead = 0; w.pdir = 1; updateTk(w); });
+    if (root.ptake.length > 1){ root.ploop = true; root.pplayhead = 0; root.ppdir = 1; }
+  }
+  syncRecUI();
+}
+
+function stepRec(root, dt){
+  const SP = 1/30;
+  if (root.armed){
+    for (const w of walk(root)){
+      if (!w.recing) continue;
+      w.recAcc += dt;
+      while (w.recAcc >= SP){
+        w.recAcc -= SP;
+        w.take.push([w.bx, w.by, w.bw, w.bh]);
+        if (w.take.length >= 3600){ w.recing = false; updateTk(w); break; }
+      }
+    }
+    if (root.precing){
+      root.precAcc += dt;
+      while (root.precAcc >= SP){
+        root.precAcc -= SP;
+        root.ptake.push(rootParams(root));
+        if (root.ptake.length >= 3600){ root.precing = false; break; }
+      }
+    }
+  }
+  for (const w of walk(root)){
+    if (!w.looping || w.take.length < 2 || frozen(w)) continue;
+    if (G && G.w === w) continue;
+    const n = w.take.length;
+    w.playhead += dt*30 * effv(w,'warp') * w.lwarp * w.pdir;
+    if (root.boom){
+      if (w.playhead >= n-1){ w.playhead = n-1; w.pdir = -1; }
+      if (w.playhead <= 0){ w.playhead = 0; w.pdir = 1; }
+    } else if (w.playhead >= n) w.playhead -= n;
+    const f = w.take[Math.floor(clamp(w.playhead, 0, n-1))];
+    w.bx = f[0]; w.by = f[1]; w.bw = f[2]; w.bh = f[3];
+  }
+  if (root.ploop && root.ptake.length > 1){
+    const n = root.ptake.length;
+    root.pplayhead += dt*30 * effv(root,'warp') * root.ppdir;
+    if (root.boom){
+      if (root.pplayhead >= n-1){ root.pplayhead = n-1; root.ppdir = -1; }
+      if (root.pplayhead <= 0){ root.pplayhead = 0; root.ppdir = 1; }
+    } else if (root.pplayhead >= n) root.pplayhead -= n;
+    const f = root.ptake[Math.floor(clamp(root.pplayhead, 0, n-1))];
+    root.o.feel = f.feel; root.o.lag = f.lag; root.o.chaos = f.chaos;
+    root.o.rot = f.rot; root.o.mode = f.mode; root.o.auto = f.auto;
+    root.el.style.setProperty('--rot', f.rot);
+    if (SEL && rootOf(SEL) === root) syncParamUI();
+  }
+}
+
+/* ---------- auto breath + physics ---------- */
+
+function noise(w, k, t){
+  return Math.sin(w.frq[k]*t + w.seed[k])*0.6
+       + Math.sin(w.frq[k]*1.9*t + w.seed[k+2])*0.28
+       + Math.sin(w.frq[k]*3.7*t + w.seed[(k+5)%8])*0.12;
+}
+
+function autoOffset(w, t){
+  const me = eff(w,'mode'), chaos = effv(w,'chaos'), lag = effv(w,'lag');
+  let src = w, tt = t, inv = 1;
+  if (me.v === 'nsync')       { src = me.owner; }
+  else if (me.v === 'ripple') { src = me.owner; tt = t - me.d * (0.12 + lag*0.75); }
+  else if (me.v === 'unsync') { src = me.owner; inv = (me.d % 2) ? -1 : 1; }
+  const a = chaos * 0.24;
+  return { fw: 1 + inv*a*noise(src,0,tt), fh: 1 + inv*a*noise(src,1,tt*0.93),
+           dx: chaos*14*noise(src,2,tt*0.7), dy: chaos*11*noise(src,3,tt*0.77) };
+}
+
+function stepCycle(root, dt){
+  if (root.easing){
+    let done = true;
+    for (const w of walk(root)){
+      if (w.o.fplay){
+        const r = (w.o.frate !== undefined ? w.o.frate : effv(w,'frate')) * Math.exp(-dt*1.5);
+        w.o.frate = r;
+        if (r <= 0.26){ w.o.frate = 0.26; w.o.fplay = false; } else done = false;
+      }
+      if (w.o.auto || (!w.parent && effv(w,'auto'))){
+        const c = Math.max(0, (w.o.chaos !== undefined ? w.o.chaos : effv(w,'chaos')) - dt*0.4);
+        w.o.chaos = c;
+        if (c <= 0.004){ w.o.chaos = 0; w.o.auto = false; } else done = false;
+      }
+    }
+    if (SEL && rootOf(SEL) === root){ syncParamUI(); syncCycUI(); syncRateUI(); }
+    if (done) root.easing = false;
+  }
+  let dirty = false;
+  for (const w of walk(root)){
+    if (w.o.fplay !== true) continue;
+    if (!poolFor(w, effv(w,'fill')).length) continue;
+    w.cycAcc += effv(w,'frate') * dt;
+    while (w.cycAcc >= 1){ w.cycAcc -= 1; w.o.fphase = (w.o.fphase || 0) + 1; dirty = true; }
+  }
+  if (dirty) renderFills(root);
+}
+
+function moveSelected(dt){
+  const w = SEL;
+  if (!w || frozen(w)) return;
+  const dx = (held.has('d')?1:0) - (held.has('a')?1:0);
+  const dy = (held.has('s')?1:0) - (held.has('w')?1:0);
+  if (!dx && !dy) return;
+  if (w.looping){ w.looping = false; updateTk(w); syncRecUI(); }
+  const v = (held.has('shift') ? 46 : 180) * dt;
+  w.bx += dx*v; w.by += dy*v;
+  if (w.parent){
+    const p = w.parent;
+    w.bx = clamp(w.bx, EDGE, Math.max(EDGE, p.w - EDGE - w.bw));
+    w.by = clamp(w.by, EDGE, Math.max(EDGE, p.h - BAR - EDGE - w.bh));
+  }
+}
+
+function simTree(root, dt){
+  // ripple: chain drag factors along the lineage hop by hop
+  if (G && G.root === root && G.kind === 'resize' && effv(G.w,'mode') === 'ripple'){
+    const tau = 0.04 + effv(G.w,'lag')*0.34;
+    const a = 1 - Math.exp(-dt/tau);
+    const up = ancestryPath(G.w).length, down = maxDepthBelow(G.w);
+    while (G.sfUp.length   < up)   G.sfUp.push({x:1,y:1});
+    while (G.sfDown.length < down) G.sfDown.push({x:1,y:1});
+    let prev = { x:G.fx, y:G.fy };
+    G.sfUp.forEach(f => { f.x += (prev.x - f.x)*a; f.y += (prev.y - f.y)*a; prev = f; });
+    prev = { x:G.fx, y:G.fy };
+    G.sfDown.forEach(f => { f.x += (prev.x - f.x)*a; f.y += (prev.y - f.y)*a; prev = f; });
+    applyToLineage((n, d, isAnc) => {
+      if (frozen(n)) return;
+      const st = G.start.get(n); if (!st) return;
+      const f = (isAnc ? G.sfUp[d-1] : G.sfDown[d-1]); if (!f) return;
+      setScaled(n, st, f.x, f.y);
+    });
+  }
+  if (G && G.root === root && G.kind === 'resize') pushAncestors(G.w);
+
+  for (const w of walk(root)){
+    if (frozen(w)) continue;
+    const dragged = (G && G.w === w);
+    const k = 60 + effv(w,'feel')*440, damp = 2*Math.sqrt(k)*0.72;
+
+    let tx = w.bx, ty = w.by, tw = w.bw, th = w.bh;
+    if (effv(w,'auto') && !dragged){
+      const o = autoOffset(w, time);
+      tw = w.bw * o.fw; th = w.bh * o.fh;
+      tx = w.bx + (w.bw - tw)/2 + o.dx;
+      ty = w.by + (w.bh - th)/2 + o.dy;
+    }
+    if (w.parent && !dragged){
+      const p = w.parent;
+      tw = clamp(tw, MIN_W, Math.max(MIN_W, p.w - EDGE*2));
+      th = clamp(th, MIN_H, Math.max(MIN_H, p.h - BAR - EDGE*2));
+      tx = clamp(tx, EDGE, Math.max(EDGE, p.w - EDGE - tw));
+      ty = clamp(ty, EDGE, Math.max(EDGE, p.h - BAR - EDGE - th));
+    }
+
+    if (!dragged){
+      w.vw += (k*(tw - w.w) - damp*w.vw)*dt;  w.w += w.vw*dt;
+      w.vh += (k*(th - w.h) - damp*w.vh)*dt;  w.h += w.vh*dt;
+      w.vx += (k*(tx - w.x) - damp*w.vx)*dt;  w.x += w.vx*dt;
+      w.vy += (k*(ty - w.y) - damp*w.vy)*dt;  w.y += w.vy*dt;
+    }
+  }
+
+  for (const w of walk(root)){
+    if (frozen(w)) continue;
+    const s = w.el.style;
+    s.left = w.x.toFixed(1)+'px'; s.top = w.y.toFixed(1)+'px';
+    s.width = Math.max(20,w.w).toFixed(1)+'px'; s.height = Math.max(18,w.h).toFixed(1)+'px';
+    if (w.baked){
+      w.space.style.width  = (w.nw - 1) + 'px';
+      w.space.style.height = (w.nh - BAR - 0.5) + 'px';
+      w.space.style.transform = 'scale(' + (Math.max(20,w.w)/w.nw) + ',' + (Math.max(18,w.h)-BAR)/(w.nh-BAR) + ')';
+    }
+  }
+}
+
+function step(dt){
+  time += dt;
+  for (const r of roots){ stepRec(r, dt); stepCycle(r, dt); }
+  moveSelected(dt);
+  for (const r of roots) simTree(r, dt);
+}
+
+let last = performance.now();
+function loop(now){
+  const dt = Math.min(0.033, (now - last)/1000); last = now;
+  try { step(dt); } catch(err){ console.error(err); }
+  requestAnimationFrame(loop);
+}
+
+/* ---------- controls (cascade from SEL) ---------- */
+
+const $ = id => document.getElementById(id);
+
+/* ---------- deploy: armed cursor draws windows onto any visible surface ---------- */
+
+let deploy = null; // { lastX, lastY, drag:{sx,sy,parent}|null, target }
+const STAMP_W = 150, STAMP_H = 115;
+
+function spawnWin(parent, rect){
+  const w = mkWin(rect, parent || null);
+  if (parent){ parent.space.appendChild(w.el); parent.kids.push(w); }
+  else { w.accent = ACCENTS[(rootSeq++) % ACCENTS.length]; desk.appendChild(w.el); roots.push(w); }
+  return w;
+}
+
+function deployTargetAt(x, y){
+  const el = document.elementFromPoint(x, y);
+  const we = el && el.closest ? el.closest('.win') : null;
+  let w = we && we._win ? we._win : null;
+  while (w && (frozen(w) || w.baked)) w = w.parent; // no births inside dead pixels
+  return w; // null = the desk
+}
+
+function setDeployPeek(w){
+  if (deploy && deploy.target === w) return;
+  if (deploy && deploy.target) deploy.target.el.classList.remove('gpeek');
+  if (deploy) deploy.target = w;
+  if (w) w.el.classList.add('gpeek');
+}
+
+function armDeploy(on){
+  if (on && deploy) return;
+  if (!on && !deploy) return;
+  if (on){
+    deploy = { lastX: innerWidth/2, lastY: innerHeight/2, drag:null, target:null };
+    document.body.classList.add('deploy');
+    $('newwin').classList.add('on');
+    document.addEventListener('pointermove', deployMove);
+    document.addEventListener('pointerup', deployUp);
+  } else {
+    setDeployPeek(null);
+    document.body.classList.remove('deploy');
+    $('newwin').classList.remove('on');
+    $('ghost').style.display = 'none';
+    document.removeEventListener('pointermove', deployMove);
+    document.removeEventListener('pointerup', deployUp);
+    deploy = null;
+  }
+}
+
+function ghostRect(x, y, w, h){
+  const g = $('ghost');
+  g.style.display = '';
+  g.style.left = x+'px'; g.style.top = y+'px';
+  g.style.width = w+'px'; g.style.height = h+'px';
+}
+
+function deployMove(e){
+  if (!deploy) return;
+  deploy.lastX = e.clientX; deploy.lastY = e.clientY;
+  if (deploy.drag){
+    const x = Math.min(deploy.drag.sx, e.clientX), y = Math.min(deploy.drag.sy, e.clientY);
+    ghostRect(x, y, Math.abs(e.clientX - deploy.drag.sx), Math.abs(e.clientY - deploy.drag.sy));
+  } else {
+    ghostRect(e.clientX - STAMP_W/2, e.clientY - STAMP_H/2, STAMP_W, STAMP_H);
+    setDeployPeek(deployTargetAt(e.clientX, e.clientY));
+  }
+}
+
+function deployDown(e){
+  deploy.drag = { sx: e.clientX, sy: e.clientY, parent: deployTargetAt(e.clientX, e.clientY) };
+  setDeployPeek(deploy.drag.parent);
+}
+
+function deployUp(e){
+  if (!deploy || !deploy.drag) return;
+  const d = deploy.drag; deploy.drag = null;
+  let x = Math.min(d.sx, e.clientX), y = Math.min(d.sy, e.clientY);
+  let w = Math.abs(e.clientX - d.sx), h = Math.abs(e.clientY - d.sy);
+  if (w < 24 || h < 24){ x = d.sx - STAMP_W/2; y = d.sy - STAMP_H/2; w = STAMP_W; h = STAMP_H; } // a tap stamps
+  w = Math.max(MIN_W, w); h = Math.max(MIN_H, h);
+  commitDeploy(d.parent, {x, y, w, h}, 1);
+  if (!e.shiftKey) armDeploy(false); // ⇧ keeps you armed for sprees
+}
+
+function commitDeploy(parent, vr, depth){
+  let rect;
+  if (parent){
+    const sr = parent.space.getBoundingClientRect();
+    rect = { x: vr.x - sr.x, y: vr.y - sr.y, w: vr.w, h: vr.h };
+    rect.x = clamp(rect.x, EDGE, Math.max(EDGE, parent.w - EDGE - rect.w));
+    rect.y = clamp(rect.y, EDGE, Math.max(EDGE, parent.h - BAR - EDGE - rect.h));
+  } else rect = vr;
+  let p = parent, made = spawnWin(p, rect), first = made;
+  for (let i = 1; i < depth; i++){
+    const cw = Math.max(MIN_W, made.bw*0.72), ch = Math.max(MIN_H, (made.bh-BAR)*0.68);
+    const k = spawnWin(made, { x:(made.bw-cw)/2 + 6, y:((made.bh-BAR)-ch)/2 + 4, w:cw, h:ch });
+    k.w = 24; k.h = 20; // inner links bloom in
+    made = k;
+  }
+  refreshTree(rootOf(first));
+  select(made);
+  step(0);
+}
+
+/* ---------- tap tempo ---------- */
+
+let taps = [];
+function tapTempo(){
+  const now = performance.now();
+  if (taps.length && now - taps[taps.length-1] > 2500) taps = [];
+  taps.push(now);
+  if (taps.length > 5) taps.shift();
+  if (taps.length >= 2){
+    const iv = (taps[taps.length-1] - taps[0]) / (taps.length - 1);
+    setOverride('frate', clamp(1000/iv, 0.25, 24));
+    syncRateUI();
+    if (!effv(SEL,'fplay')) toggleCyc(); // tapping a tempo means you want it running
+  }
+}
+
+function setOverride(k, v){
+  if (!SEL) return;
+  if (SEL === rootOf(SEL) && rootOf(SEL).ploop && ['feel','lag','chaos','rot','mode','auto'].includes(k)){
+    rootOf(SEL).ploop = false; syncRecUI(); // touching a replayed param takes it back
+  }
+  SEL.o[k] = v;
+  if (k === 'rot') SEL.el.style.setProperty('--rot', v);
+}
+function clearOverride(k){
+  if (!SEL || SEL.o[k] === undefined) return;
+  delete SEL.o[k];
+  if (k === 'rot'){
+    if (!SEL.parent) SEL.el.style.setProperty('--rot', DEFAULTS.rot);
+    else SEL.el.style.removeProperty('--rot');
+  }
+  syncAllUI();
+  renderFills(rootOf(SEL));
+}
+
+const modesRow = $('modes');
+MODES.forEach(m => {
+  const p = document.createElement('span');
+  p.className = 'pill'; p.textContent = MODE_LABEL[m]; p.dataset.m = m;
+  p.addEventListener('click', () => { setOverride('mode', m); syncParamUI(); });
+  p.addEventListener('dblclick', () => clearOverride('mode'));
+  modesRow.appendChild(p);
+});
+
+$('autoBtn').addEventListener('click', () => { setOverride('auto', !effv(SEL,'auto')); syncParamUI(); });
+$('symBtn').addEventListener('click', () => setSym(!L.sym));
+$('propBtn').addEventListener('click', () => setProp(!L.prop));
+function setSym(v){ L.sym = v; $('symBtn').classList.toggle('on', v); }
+function setProp(v){ L.prop = v; $('propBtn').classList.toggle('on', v); }
+
+$('addIn').addEventListener('click', () => SEL && addChild(SEL));
+$('closeSel').addEventListener('click', () => SEL && closeWin(SEL));
+$('newwin').addEventListener('click', () => armDeploy(!deploy));
+$('tapBtn').addEventListener('click', tapTempo);
+$('reset').addEventListener('click', () => {
+  [...roots].forEach(r => { r.kids = []; r.el.remove(); });
+  roots.length = 0; peeked = null;
+  newRoot(5);
+});
+
+function bindSlider(id, key){
+  const el = $(id), out = $(id+'O'), lab = $(id+'L') || $(key+'L');
+  el.addEventListener('input', () => {
+    setOverride(key, parseFloat(el.value));
+    out.textContent = parseFloat(el.value).toFixed(2);
+    if (lab) lab.classList.add('ovr');
+    if (lab) lab.textContent = '•' + lab.textContent.replace(/^•/,'');
+  });
+  if (lab) lab.addEventListener('dblclick', () => clearOverride(key));
+}
+bindSlider('feel','feel'); bindSlider('lag','lag'); bindSlider('chaos','chaos'); bindSlider('rot','rot');
+
+function markLabel(labId, key){
+  const lab = $(labId); if (!lab || !SEL) return;
+  const own = SEL.o[key] !== undefined;
+  lab.classList.toggle('ovr', own);
+  lab.textContent = (own ? '•' : '') + lab.textContent.replace(/^•/,'');
+}
+
+function syncParamUI(){
+  if (!SEL) return;
+  const mode = effv(SEL,'mode');
+  modesRow.querySelectorAll('.pill').forEach(p => p.classList.toggle('on', p.dataset.m === mode));
+  $('autoBtn').classList.toggle('on', effv(SEL,'auto'));
+  ['feel','lag','chaos','rot'].forEach(k => {
+    $(k).value = effv(SEL,k); $(k+'O').textContent = effv(SEL,k).toFixed(2);
+    markLabel(k+'L', k);
+  });
+}
+function syncFillUI(){
+  if (!SEL) return;
+  const f = effv(SEL,'fill');
+  document.querySelectorAll('#fills .pill').forEach(p => p.classList.toggle('on', p.dataset.f === f));
+  $('ordBtn').textContent = effv(SEL,'forder') === 'seq' ? 'SEQ' : 'SHUF';
+}
+function syncCycUI(){ if (SEL) $('cycBtn').classList.toggle('on', effv(SEL,'fplay')); }
+function syncRateUI(){
+  if (!SEL) return;
+  const r = effv(SEL,'frate');
+  $('rateSl').value = (Math.log(r/0.25)/Math.log(96)).toFixed(3);
+  $('rateO').textContent = r.toFixed(1) + '/s';
+  markLabel('rateL','frate');
+}
+function syncRecUI(){
+  if (!SEL) return;
+  const root = rootOf(SEL);
+  const lanes = [...walk(root)].filter(w => w.take.length > 1).length + (root.ptake.length > 1 ? 1 : 0);
+  const anyLoop = [...walk(root)].some(w => w.looping) || root.ploop;
+  $('recBtn').classList.toggle('on', root.armed);
+  $('takeBtn').classList.toggle('on', anyLoop);
+  $('boomBtn').classList.toggle('on', root.boom);
+  $('takeBtn').style.opacity = lanes ? '' : '.45';
+}
+function warpTarget(){
+  if (!SEL) return null;
+  if (warpScope === 'tree') return { get:()=>effv(SEL,'warp'), set:v=>setOverride('warp',v) };
+  return { get:()=>SEL.lwarp, set:v=>SEL.lwarp=v };
+}
+function syncWarpUI(){
+  if (!SEL) return;
+  const t = warpTarget(); if (!t) return;
+  $('warpScopeBtn').textContent = (warpScope === 'tree' ? (SEL.o.warp !== undefined ? '•' : '') + 'W:TREE' : 'W:LANE');
+  $('warpScopeBtn').classList.toggle('ovr', warpScope === 'tree' && SEL.o.warp !== undefined);
+  $('warpSl').value = (Math.log(clamp(t.get(),0.05,4)/0.05)/Math.log(80)).toFixed(3);
+  $('warpO').textContent = t.get().toFixed(2) + '×';
+}
+function syncGroupTag(){
+  if (!SEL) return;
+  const root = rootOf(SEL);
+  $('gdot').style.background = root.accent;
+  $('gtag').textContent = '— d' + depthOf(SEL) + (root.kids.length || depthOf(SEL) ? '' : ' (bare)');
+}
+function syncAllUI(){ syncParamUI(); syncFillUI(); syncCycUI(); syncRateUI(); syncRecUI(); syncWarpUI(); syncGroupTag(); }
+
+$('warpScopeBtn').addEventListener('click', () => { warpScope = warpScope === 'tree' ? 'lane' : 'tree'; syncWarpUI(); });
+$('warpScopeBtn').addEventListener('dblclick', () => { if (warpScope === 'tree') clearOverride('warp'); });
+$('warpSl').addEventListener('input', () => {
+  const t = warpTarget(); if (!t) return;
+  t.set(0.05*Math.pow(80, parseFloat($('warpSl').value)));
+  $('warpO').textContent = t.get().toFixed(2) + '×';
+  if (warpScope === 'tree') syncWarpUI();
+});
+$('rateSl').addEventListener('input', () => {
+  setOverride('frate', 0.25*Math.pow(96, parseFloat($('rateSl').value)));
+  $('rateO').textContent = effv(SEL,'frate').toFixed(1) + '/s';
+  markLabel('rateL','frate');
+});
+$('rateL').addEventListener('dblclick', () => clearOverride('frate'));
+$('cycBtn').addEventListener('click', toggleCyc);
+$('stepF').addEventListener('click', () => { if (SEL){ SEL.o.fphase = (effv(SEL,'fphase'))+1; renderFills(rootOf(SEL)); } });
+$('stepB').addEventListener('click', () => { if (SEL){ SEL.o.fphase = (effv(SEL,'fphase'))-1; renderFills(rootOf(SEL)); } });
+$('ordBtn').addEventListener('click', () => {
+  if (!SEL) return;
+  const cur = effv(SEL,'forder');
+  SEL.o.forder = cur === 'seq' ? 'rnd' : 'seq';
+  if (SEL.o.forder === 'rnd') SEL.shufSeed = (Math.random()*997)|0;
+  syncFillUI(); renderFills(rootOf(SEL));
+});
+
+$('recBtn').addEventListener('click', () => SEL && toggleArm(rootOf(SEL)));
+$('takeBtn').addEventListener('click', () => SEL && masterTake(rootOf(SEL)));
+$('boomBtn').addEventListener('click', () => { if (SEL){ const r = rootOf(SEL); r.boom = !r.boom; syncRecUI(); } });
+
+document.querySelectorAll('#fills .pill').forEach(p => {
+  p.addEventListener('click', () => {
+    if (!SEL) return;
+    const m = p.dataset.f;
+    if (m === 'palette' && !effv(SEL,'pal').length){ $('palIn').click(); return; }
+    if (m === 'imgs' && !effv(SEL,'media').length){ $('imgIn').click(); return; }
+    setFill(m);
+  });
+  p.addEventListener('dblclick', () => {
+    if (p.dataset.f === 'palette') $('palIn').click();
+    if (p.dataset.f === 'imgs') $('imgIn').click();
+  });
+});
+
+function loadMedia(files){
+  if (!files.length || !SEL) return;
+  (SEL.o.media || []).forEach(it => URL.revokeObjectURL(it.url));
+  SEL.o.media = files.map(f => ({ url:URL.createObjectURL(f), vid:f.type.startsWith('video/') }));
+  setFill('imgs');
+}
+function loadPal(file){
+  file.text().then(t => {
+    if (!SEL) return;
+    let cols = (t.match(/#?[0-9a-fA-F]{6}\b/g) || []).map(h => '#' + h.replace('#',''));
+    if (!cols.length)
+      cols = (t.match(/^\s*\d{1,3}\s+\d{1,3}\s+\d{1,3}/gm) || [])
+        .map(l => { const [r,gg,b] = l.trim().split(/\s+/).map(Number); return `rgb(${r} ${gg} ${b})`; });
+    if (cols.length){ SEL.o.pal = cols; setFill('palette'); }
+  });
+}
+$('imgIn').addEventListener('change', e => loadMedia([...e.target.files].filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'))));
+$('palIn').addEventListener('change', e => { if (e.target.files[0]) loadPal(e.target.files[0]); });
+
+desk.addEventListener('dragover', e => e.preventDefault());
+desk.addEventListener('drop', e => {
+  e.preventDefault();
+  const files = [...(e.dataTransfer ? e.dataTransfer.files : [])];
+  const media = files.filter(f => f.type.startsWith('image/') || f.type.startsWith('video/'));
+  if (media.length){ loadMedia(media); return; }
+  const txt = files.find(f => !f.type || f.type.startsWith('text/') || /\.(hex|txt|csv|gpl|pal)$/i.test(f.name));
+  if (txt) loadPal(txt);
+});
+
+/* focus, raise, hover identification — per root tree */
+function groupOf(el){
+  const we = el && el.closest ? el.closest('.win') : null;
+  return we && we._win ? rootOf(we._win) : null;
+}
+desk.addEventListener('pointerdown', e => {
+  if (deploy){ e.stopPropagation(); e.preventDefault(); deployDown(e); return; }
+  const r = groupOf(e.target);
+  if (r && desk.lastElementChild !== r.el) desk.appendChild(r.el);
+}, { capture:true });
+
+// double-click any surface = a window is born there (desk → root, body → child)
+document.addEventListener('dblclick', e => {
+  if (e.target.closest('#ctrl') || deploy) return;
+  const t = e.target;
+  const isSurface = t === desk || t.classList.contains('space') || t.classList.contains('fill') || t.classList.contains('fossil');
+  if (!isSurface) return;
+  let p = (t === desk) ? null : (t.closest('.win') ? t.closest('.win')._win : null);
+  while (p && (frozen(p) || p.baked)) p = p.parent;
+  commitDeploy(p, { x:e.clientX - STAMP_W/2, y:e.clientY - STAMP_H/2, w:STAMP_W, h:STAMP_H }, 1);
+});
+desk.addEventListener('pointerover', e => {
+  const r = groupOf(e.target);
+  const want = (r && SEL && r !== rootOf(SEL)) ? r : null;
+  if (peeked === want) return;
+  if (peeked) peeked.el.classList.remove('gpeek');
+  peeked = want;
+  if (peeked) peeked.el.classList.add('gpeek');
+});
+desk.addEventListener('pointerleave', () => {
+  if (peeked) peeked.el.classList.remove('gpeek');
+  peeked = null;
+});
+
+/* controls window drag */
+let ctrlTouched = false;
+function placeCtrl(){
+  const c = $('ctrl');
+  c.style.left = Math.max(8, VW() - 264) + 'px';
+  c.style.top  = Math.max(8, VH() - 500) + 'px';
+}
+(() => {
+  const c = $('ctrl'), bar = $('ctrlbar');
+  placeCtrl();
+  let d = null;
+  bar.addEventListener('pointerdown', e => {
+    ctrlTouched = true;
+    d = { px:e.clientX, py:e.clientY, x:c.offsetLeft, y:c.offsetTop };
+    bar.setPointerCapture(e.pointerId);
+  });
+  bar.addEventListener('pointermove', e => {
+    if (!d) return;
+    c.style.left = (d.x + e.clientX - d.px) + 'px';
+    c.style.top  = (d.y + e.clientY - d.py) + 'px';
+  });
+  bar.addEventListener('pointerup', () => d = null);
+})();
+
+/* ---------- keyboard ---------- */
+
+document.addEventListener('keydown', e => {
+  if (e.metaKey || e.ctrlKey) return;
+  if (e.key === 'Alt'){ if (!e.repeat) setSym(!L.sym); e.preventDefault(); return; }
+  const k = e.key.toLowerCase();
+  if (k === 'w' || k === 'a' || k === 's' || k === 'd'){ held.add(k); e.preventDefault(); return; }
+  if (k === 'shift'){ held.add(k); return; }
+  if (deploy){ // armed cursor: digits deploy an N-deep chain at the pointer; ESC/N disarm
+    const n = parseInt(e.key, 10);
+    if (n >= 1 && n <= 9){
+      commitDeploy(deployTargetAt(deploy.lastX, deploy.lastY),
+        { x:deploy.lastX - STAMP_W/2, y:deploy.lastY - STAMP_H/2, w:STAMP_W, h:STAMP_H }, n);
+      if (!e.shiftKey) armDeploy(false);
+      return;
+    }
+    if (e.key === 'Escape' || k === 'n'){ armDeploy(false); return; }
+  }
+  if (!SEL) return;
+  if (k === 't'){ tapTempo(); return; }
+  if (e.key === 'Tab'){ // DFS through the focused tree
+    e.preventDefault();
+    const seq = [...walk(rootOf(SEL))];
+    select(seq[(seq.indexOf(SEL) + 1) % seq.length]);
+    return;
+  }
+  if (k === 'c'){
+    if (e.shiftKey) for (const n of walk(SEL)) centerWin(n);
+    else centerWin(SEL);
+    return;
+  }
+  if (e.key === 'ArrowRight'){ e.preventDefault(); SEL.o.fphase = effv(SEL,'fphase')+1; renderFills(rootOf(SEL)); return; }
+  if (e.key === 'ArrowLeft'){ e.preventDefault(); SEL.o.fphase = effv(SEL,'fphase')-1; renderFills(rootOf(SEL)); return; }
+  if (e.key === 'ArrowUp' || e.key === 'Up'){
+    e.preventDefault();
+    if (e.shiftKey){ const t = warpTarget(); if (t) t.set(Math.min(4, t.get()*1.25)); syncWarpUI(); }
+    else { setOverride('frate', Math.min(24, effv(SEL,'frate')*1.25)); syncRateUI(); }
+    return;
+  }
+  if (e.key === 'ArrowDown' || e.key === 'Down'){
+    e.preventDefault();
+    if (e.shiftKey){ const t = warpTarget(); if (t) t.set(Math.max(0.05, t.get()/1.25)); syncWarpUI(); }
+    else { setOverride('frate', Math.max(0.25, effv(SEL,'frate')/1.25)); syncRateUI(); }
+    return;
+  }
+  if (e.key === ' '){ e.preventDefault(); toggleCyc(); return; }
+  if (k === 'r'){ toggleArm(rootOf(SEL)); return; }
+  if (k === 'p'){ masterTake(rootOf(SEL)); return; }
+  if (k === 'b'){ const r = rootOf(SEL); r.boom = !r.boom; syncRecUI(); return; }
+  if (k === 'n'){ armDeploy(true); return; }
+  if (k === 'e'){ roots.forEach(r => r.easing = true); return; }
+  if (e.key === 'Escape'){
+    roots.forEach(r => {
+      r.easing = false; r.armed = false; r.precing = false; r.ploop = false;
+      for (const w of walk(r)){
+        w.recing = false; w.looping = false; updateTk(w);
+        delete w.o.fplay; delete w.o.auto; // remove, don't mask — stale false overrides haunt future cycling
+      }
+    });
+    syncAllUI(); return;
+  }
+  if (k === 'q'){ setOverride('auto', !effv(SEL,'auto')); syncParamUI(); return; }
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= 5){ setOverride('mode', MODES[n-1]); syncParamUI(); }
+  else if (e.key === ']') addChild(SEL);
+  else if (e.key === '[') closeWin(SEL);
+});
+document.addEventListener('keyup', e => held.delete(e.key.toLowerCase()));
+addEventListener('blur', () => held.clear());
+
+$('hint').textContent =
+  '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · WASD move · C center · ⇧C center subtree\n' +
+  'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
+  '⊕ = window inside · ⇧⊕ = engulf kids · ⊗ = close (kids promote; a root’s kids go free) · controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
+  'looper: R arms · grab = record · release = loop · TAP/T = tap tempo · W:TREE↔W:LANE clocks · P lanes · B boom · E ease · ESC cut';
+
+/* ---------- boot ---------- */
+
+let booted = false;
+function boot(){
+  if (VW() > 60 && VH() > 60){
+    booted = true;
+    newRoot(5);
+    placeCtrl();
+    last = performance.now();
+    requestAnimationFrame(loop);
+  } else setTimeout(boot, 150);
+}
+boot();
+
+addEventListener('resize', () => {
+  if (!booted) return;
+  if (!ctrlTouched) placeCtrl();
+  if (roots.length === 1 && roots[0].bw < 300 && VW() > 400){
+    roots[0].el.remove(); roots.length = 0; newRoot(5);
+  }
+});
+</script>
+</body>
+</html>

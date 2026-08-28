@@ -1,0 +1,10 @@
+# premiere debris (separate project sharing the folder)
+Adobe Premiere Pro Auto-Save/
+*.prproj
+*.prlock
+
+# source recordings — big, local
+*.mp4
+*.mov
+
+.DS_Store
