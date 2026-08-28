@@ -1144,17 +1144,21 @@ function carryMove(e){
   c.vx = c.vy = 0;
 }
 
-function dropCarry(px, py){
+function dropCarry(px, py, join){
   if (!CARRY) return;
   const c = CARRY.w;
-  const target = deployTargetAt(px, py); // clone is pointer-transparent; can't self-target
-  if (target && rootOf(target) !== c){
-    roots.splice(roots.indexOf(c), 1);
-    const sr = target.space.getBoundingClientRect();
-    c.parent = target;
-    c.bx = c.x = c.bx - sr.x; c.by = c.y = c.by - sr.y;
-    target.space.appendChild(c.el);
-    target.kids.push(c);
+  // default: land on top of whatever's below, staying a root — a drop is a landing,
+  // not a merger. ⇧-drop opts into nesting (and the target's squeeze).
+  if (join){
+    const target = deployTargetAt(px, py); // clone is pointer-transparent; can't self-target
+    if (target && rootOf(target) !== c){
+      roots.splice(roots.indexOf(c), 1);
+      const sr = target.space.getBoundingClientRect();
+      c.parent = target;
+      c.bx = c.x = c.bx - sr.x; c.by = c.y = c.by - sr.y;
+      target.space.appendChild(c.el);
+      target.kids.push(c);
+    }
   }
   // rebase the carried window's own take: same dance, new home
   const dx = c.bx - CARRY.anchor.x, dy = c.by - CARRY.anchor.y;
@@ -1443,7 +1447,7 @@ function groupOf(el){
   return we && we._win ? rootOf(we._win) : null;
 }
 desk.addEventListener('pointerdown', e => {
-  if (CARRY){ e.stopPropagation(); e.preventDefault(); dropCarry(e.clientX, e.clientY); return; }
+  if (CARRY){ e.stopPropagation(); e.preventDefault(); dropCarry(e.clientX, e.clientY, e.shiftKey); return; }
   if (deploy){ e.stopPropagation(); e.preventDefault(); deployDown(e); return; }
   const r = groupOf(e.target);
   if (r && desk.lastElementChild !== r.el) desk.appendChild(r.el);
@@ -1506,7 +1510,7 @@ document.addEventListener('keydown', e => {
   if (k === 'shift'){ held.add(k); return; }
   if (CARRY){
     if (e.key === 'Escape'){ cancelCarry(); return; }
-    if (k === 'x'){ const c = CARRY.w; dropCarry(c.bx + c.bw/2, c.by + 13); return; } // X again = drop in place
+    if (k === 'x'){ const c = CARRY.w; dropCarry(c.bx + c.bw/2, c.by + 13, e.shiftKey); return; } // X drops in place; ⇧X nests
     return; // carrying: other keys wait
   }
   if (deploy){ // armed cursor: digits deploy an N-deep chain at the pointer; ESC/N disarm
@@ -1591,7 +1595,7 @@ $('hint').textContent =
   '⌥ tap = SYM latch · ⇧ prop · grab = title bar · Tab = walk tree · ⇧Tab = cycle trees · WASD move · C center · ⇧C center subtree\n' +
   'panel navigator: hover a row = find it on stage · click = select (no re-stack) · dblclick = bring to front · tabs = trees\n' +
   'DBLCLICK any surface = a window is born there · N or +WIN arms DEPLOY: drag draws one to size · digits 1–9 = N-deep chain · ⇧ keeps you armed\n' +
-  '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click drops it, into anything; ESC aborts)\n' +
+  '⊕ = window inside · ⇧⊕ = engulf · ⊗ = close · X = xerox the selection (loops intact, rides cursor — click lands it ON TOP · ⇧click nests it INTO what’s below · ESC aborts)\n' +
   'controls cascade from SELECTED down · • set here · dblclick label = inherit\n' +
   'looper: R arms · grab = record · release = loop · TAP/T = tap tempo · W:TREE↔W:LANE clocks · P lanes · B boom · E ease · ESC cut';
 
